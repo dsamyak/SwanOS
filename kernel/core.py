@@ -1,13 +1,11 @@
 """
 SwanOS — LLM Kernel
-The cognitive core: sends user intents to Gemini via REST API,
+The cognitive core: sends user intents to Gemini via the official SDK,
 handles tool-call loops, and returns final answers.
-Uses raw HTTP requests for maximum Python version compatibility.
 """
 
-import json
-import time as _time
-import requests
+from google import genai
+from google.genai import types
 
 from config import GEMINI_API_KEY, SYSTEM_PROMPT, MAX_TOOL_ROUNDS, MODEL_NAME
 from kernel.scheduler import Scheduler
@@ -15,21 +13,17 @@ from drivers.filesystem import FilesystemDriver
 from drivers.code_executor import CodeExecutorDriver
 from drivers.web_search import WebSearchDriver
 
-API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-MAX_RETRIES = 5          # How many times to retry on 429
-INITIAL_BACKOFF = 5      # First wait (seconds); doubles each retry
 
-
-def _build_gemini_tools(tool_defs: list) -> list:
-    """Convert OpenAI-style tool schemas to Gemini REST API format."""
+def _build_tool_declarations(tool_defs: list) -> list:
+    """Convert our OpenAI-style tool schemas into Gemini SDK FunctionDeclarations."""
     declarations = []
     for tool in tool_defs:
         func = tool["function"]
         params = func.get("parameters", {})
-        decl = {
-            "name": func["name"],
-            "description": func["description"],
-            "parameters": {
+        declarations.append(types.FunctionDeclaration(
+            name=func["name"],
+            description=func["description"],
+            parameters={
                 "type": "OBJECT",
                 "properties": {
                     k: {
@@ -40,19 +34,19 @@ def _build_gemini_tools(tool_defs: list) -> list:
                 },
                 "required": params.get("required", []),
             },
-        }
-        declarations.append(decl)
-    return [{"functionDeclarations": declarations}]
+        ))
+    return declarations
 
 
 class LLMKernel:
-    """The brain of SwanOS — calls Gemini REST API with a tool-call loop."""
+    """The brain of SwanOS — calls Gemini SDK with a tool-call loop."""
 
     def __init__(self):
         if not GEMINI_API_KEY:
             raise RuntimeError("GEMINI_API_KEY not set in .env")
 
-        self.api_key = GEMINI_API_KEY
+        # Initialize the Gemini client
+        self.client = genai.Client(api_key=GEMINI_API_KEY)
         self.model = MODEL_NAME
 
         # Build the scheduler and register every driver
@@ -61,40 +55,15 @@ class LLMKernel:
         self.scheduler.register_driver(CodeExecutorDriver())
         self.scheduler.register_driver(WebSearchDriver())
 
-        # Prepare Gemini-format tool definitions
+        # Prepare Gemini tool declarations
         openai_tools = self.scheduler.get_all_tool_definitions()
-        self.gemini_tools = _build_gemini_tools(openai_tools)
+        self.tool_declarations = _build_tool_declarations(openai_tools)
 
-    def _call_gemini(self, contents: list) -> dict:
-        """Make a single call to Gemini with automatic retry on 429 rate-limit."""
-        url = f"{API_BASE}/{self.model}:generateContent?key={self.api_key}"
-
-        payload = {
-            "contents": contents,
-            "tools": self.gemini_tools,
-            "systemInstruction": {
-                "parts": [{"text": SYSTEM_PROMPT}]
-            },
-        }
-
-        backoff = INITIAL_BACKOFF
-        for attempt in range(1, MAX_RETRIES + 1):
-            resp = requests.post(url, json=payload, timeout=60)
-
-            if resp.status_code == 429:
-                if attempt == MAX_RETRIES:
-                    resp.raise_for_status()          # give up after final attempt
-                print(f"  ⏳ Rate-limited (429). Retrying in {backoff}s… (attempt {attempt}/{MAX_RETRIES})")
-                _time.sleep(backoff)
-                backoff *= 2                          # exponential back-off
-                continue
-
-            resp.raise_for_status()
-            return resp.json()
-
-        # Should never reach here, but just in case
-        resp.raise_for_status()
-        return resp.json()
+        # Build reusable generation config
+        self.gen_config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            tools=[types.Tool(function_declarations=self.tool_declarations)],
+        )
 
     def run(self, user_intent: str) -> str:
         """
@@ -104,55 +73,57 @@ class LLMKernel:
         3. Repeat until Gemini returns a plain text answer (or max rounds hit).
         """
         contents = [
-            {"role": "user", "parts": [{"text": user_intent}]}
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=user_intent)],
+            )
         ]
 
         for _ in range(MAX_TOOL_ROUNDS):
-            data = self._call_gemini(contents)
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=self.gen_config,
+            )
 
-            # Parse the response
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return "[No response from kernel]"
-
-            parts = candidates[0].get("content", {}).get("parts", [])
-
-            # Check for function calls
-            function_calls = [p for p in parts if "functionCall" in p]
+            # Check for function calls in the response
+            function_calls = [
+                part for part in response.candidates[0].content.parts
+                if part.function_call is not None
+            ]
 
             if not function_calls:
-                # Extract text response
-                text_parts = [p.get("text", "") for p in parts if "text" in p]
+                # No tool calls — return the text answer
+                text_parts = [
+                    part.text for part in response.candidates[0].content.parts
+                    if part.text is not None
+                ]
                 return "\n".join(text_parts) or "[No response from kernel]"
 
             # Append the model's response to history
-            contents.append({
-                "role": "model",
-                "parts": parts,
-            })
+            contents.append(response.candidates[0].content)
 
             # Process each function call and build responses
             fn_response_parts = []
-            for fc_part in function_calls:
-                fc = fc_part["functionCall"]
-                tool_name = fc["name"]
-                tool_args = fc.get("args", {})
+            for part in function_calls:
+                fc = part.function_call
+                tool_name = fc.name
+                tool_args = dict(fc.args) if fc.args else {}
 
                 print(f"  ⚙  [{tool_name}] {tool_args}")
                 result = self.scheduler.dispatch(tool_name, tool_args)
                 print(f"  ↳  {result}")
 
-                fn_response_parts.append({
-                    "functionResponse": {
-                        "name": tool_name,
-                        "response": {"result": str(result)},
-                    }
-                })
+                fn_response_parts.append(
+                    types.Part.from_function_response(
+                        name=tool_name,
+                        response={"result": str(result)},
+                    )
+                )
 
             # Feed tool results back to Gemini
-            contents.append({
-                "role": "user",
-                "parts": fn_response_parts,
-            })
+            contents.append(
+                types.Content(role="user", parts=fn_response_parts)
+            )
 
         return "⚠ Reached maximum tool rounds — stopping."
