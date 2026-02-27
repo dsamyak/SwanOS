@@ -5,6 +5,7 @@ handles tool-call loops, and returns final answers.
 Supports Groq (OpenAI-compatible) and Gemini providers.
 """
 
+import json
 import time
 import requests
 
@@ -24,11 +25,11 @@ MAX_RESULT_LEN = 4000
 
 
 # ══════════════════════════════════════════════════════════
-#  Tool schema builders — one per provider format
+#  Tool schema builders
 # ══════════════════════════════════════════════════════════
 
 def _build_openai_tools(tool_defs: list) -> list:
-    """Build OpenAI/Groq format tool schemas (already in this format)."""
+    """Build OpenAI/Groq format tool schemas."""
     return tool_defs
 
 
@@ -103,15 +104,14 @@ class LLMKernel:
         self.history = []
 
     def _next_key(self) -> str:
-        """Get the next API key via round-robin."""
         key = self.api_keys[self._key_index % len(self.api_keys)]
         self._key_index += 1
         return key
 
     # ── Groq / OpenAI-compatible API ───────────────────────
 
-    def _call_groq(self, messages: list) -> dict:
-        """Call the Groq API (OpenAI-compatible format)."""
+    def _call_groq(self, messages: list, use_tools: bool = True) -> dict:
+        """Call the Groq API. If use_tools is False, sends without tools (fallback)."""
         backoff = INITIAL_BACKOFF
         total_keys = len(self.api_keys)
 
@@ -121,11 +121,14 @@ class LLMKernel:
             payload = {
                 "model": self.model,
                 "messages": messages,
-                "tools": self._tools,
-                "tool_choice": "auto",
                 "max_tokens": 2048,
                 "temperature": 0.7,
             }
+
+            # Only include tools if requested
+            if use_tools and self._tools:
+                payload["tools"] = self._tools
+                payload["tool_choice"] = "auto"
 
             headers = {
                 "Content-Type": "application/json",
@@ -150,9 +153,18 @@ class LLMKernel:
 
             if resp.status_code >= 400:
                 try:
-                    err_msg = resp.json().get("error", {}).get("message", resp.text[:300])
+                    err_data = resp.json()
+                    err_msg = err_data.get("error", {}).get("message", "")
+                    # Check for failed_generation — model tried to call a tool but failed
+                    failed_gen = err_data.get("error", {}).get("failed_generation", "")
                 except Exception:
                     err_msg = resp.text[:300]
+                    failed_gen = ""
+
+                if "failed_generation" in err_msg.lower() or "Failed to call a function" in err_msg:
+                    # Return a special marker so _run_groq can retry without tools
+                    return {"__failed_generation__": True, "error_msg": err_msg, "failed_gen": failed_gen}
+
                 raise RuntimeError("Groq API error {}: {}".format(resp.status_code, err_msg))
 
             return resp.json()
@@ -165,8 +177,15 @@ class LLMKernel:
 
         messages = [{"role": "system", "content": SYSTEM_PROMPT}] + list(self.history)
 
-        for _ in range(MAX_TOOL_ROUNDS):
+        for round_num in range(MAX_TOOL_ROUNDS):
             data = self._call_groq(messages)
+
+            # Handle failed function generation — retry without tools
+            if data.get("__failed_generation__"):
+                print("  ⚠  Tool call failed, retrying without tools…")
+                data = self._call_groq(messages, use_tools=False)
+                if data.get("__failed_generation__"):
+                    return "Sorry, I couldn't process that request. Please try rephrasing."
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
@@ -187,7 +206,6 @@ class LLMKernel:
             for tc in tool_calls:
                 func = tc.get("function", {})
                 tool_name = func.get("name", "")
-                import json
                 try:
                     tool_args = json.loads(func.get("arguments", "{}"))
                 except json.JSONDecodeError:
@@ -299,14 +317,12 @@ class LLMKernel:
     # ── Public interface ───────────────────────────────────
 
     def run(self, user_intent: str) -> str:
-        """Route to the correct provider's cognitive loop."""
         if self.provider == "groq":
             return self._run_groq(user_intent)
         else:
             return self._run_gemini(user_intent)
 
     def _trim_history(self):
-        """Keep conversation history within bounds."""
         if len(self.history) > MAX_HISTORY:
             self.history = self.history[-MAX_HISTORY:]
 
@@ -315,5 +331,4 @@ class LLMKernel:
         return len(self.api_keys)
 
     def clear_history(self):
-        """Clear conversation memory."""
         self.history.clear()
