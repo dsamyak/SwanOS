@@ -186,9 +186,9 @@ def _handle_builtin(command: str, kernel: LLMKernel, boot_time: float) -> str:
     # ── Whoami ──
     if cmd == "whoami":
         return (
-            f"  {_yellow('OS')}       : {platform.system()} {platform.release()}\n"
+            f"  {_yellow('OS')}       : {'SwanOs'}\n"
             f"  {_yellow('Machine')}  : {platform.machine()}\n"
-            f"  {_yellow('Python')}   : {platform.python_version()}\n"
+            
             f"  {_yellow('Node')}     : {platform.node()}\n"
             f"  {_yellow('SwanOS')}   : v{VERSION}"
         )
