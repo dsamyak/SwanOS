@@ -1,6 +1,20 @@
+# SwanOS Build Artifacts
+*.o
+*.bin
+*.iso
+iso/
+
+# Environment
 .env
+
+# Python cache (bridge.py)
 __pycache__/
 *.pyc
-workspace/
-.venv/
-venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
