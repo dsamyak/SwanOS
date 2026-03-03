@@ -22,6 +22,9 @@
 #include "fs.h"
 #include "user.h"
 #include "llm.h"
+#include "memory.h"
+#include "rtc.h"
+#include "game.h"
 #include "ports.h"
 
 /* ── Layout constants ──────────────────────────────────── */
@@ -85,6 +88,20 @@ static int chat_scroll = 0;
 #define INPUT_MAX 200
 static char input_buf[INPUT_MAX];
 static int  input_pos = 0;
+
+/* ── Command history ──────────────────────────────────── */
+#define GUI_HIST_SIZE 16
+static char gui_history[GUI_HIST_SIZE][INPUT_MAX];
+static int  gui_hist_count = 0;
+static int  gui_hist_pos   = 0;
+
+static void gui_hist_add(const char *cmd) {
+    if (cmd[0] == '\0') return;
+    if (gui_hist_count > 0 && strcmp(gui_history[(gui_hist_count - 1) % GUI_HIST_SIZE], cmd) == 0)
+        return;
+    strcpy(gui_history[gui_hist_count % GUI_HIST_SIZE], cmd);
+    gui_hist_count++;
+}
 
 /* ── Drawing primitives ──────────────────────────────────── */
 
@@ -386,18 +403,19 @@ static void draw_status(void) {
     /* Architecture */
     screen_put_str_at(STATUS_ROW, 34, "x86", C_STATUS_FG, C_STATUS_BG);
 
-    /* Uptime on right */
-    uint32_t secs = timer_get_seconds();
-    uint32_t mins = secs / 60;
-    uint32_t hrs = mins / 60;
-    secs %= 60; mins %= 60;
-    char uptime[20]; char tmp[8];
-    strcpy(uptime, "Up:");
-    itoa(hrs, tmp, 10); strcat(uptime, tmp); strcat(uptime, "h");
-    itoa(mins, tmp, 10); strcat(uptime, tmp); strcat(uptime, "m");
-    itoa(secs, tmp, 10); strcat(uptime, tmp); strcat(uptime, "s");
-    int ulen = strlen(uptime);
-    screen_put_str_at(STATUS_ROW, W - ulen - 2, uptime, VGA_WHITE, C_STATUS_BG);
+    /* RTC clock on right */
+    rtc_time_t rtc;
+    rtc_read(&rtc);
+    char clock_buf[10];
+    rtc_format_time(&rtc, clock_buf);
+    screen_put_str_at(STATUS_ROW, W - 10, clock_buf, VGA_WHITE, C_STATUS_BG);
+
+    /* Memory usage */
+    char mem_buf[16]; char tmp[8];
+    strcpy(mem_buf, "Mem:");
+    itoa(mem_used() / 1024, tmp, 10); strcat(mem_buf, tmp);
+    strcat(mem_buf, "K");
+    screen_put_str_at(STATUS_ROW, W - 20, mem_buf, C_STATUS_FG, C_STATUS_BG);
 }
 
 /* ── Hints bar ────────────────────────────────────────────── */
@@ -587,6 +605,79 @@ static int gui_process_cmd(char *cmd) {
         add_chat(msg, 0);
         return 0;
     }
+    if (strcmp(cmd, "date") == 0) {
+        rtc_time_t t;
+        rtc_read(&t);
+        char dbuf[12], tbuf[10], wbuf[4];
+        rtc_format_date(&t, dbuf);
+        rtc_format_time(&t, tbuf);
+        rtc_format_weekday(&t, wbuf);
+        char msg[40];
+        strcpy(msg, wbuf); strcat(msg, "  "); strcat(msg, dbuf);
+        strcat(msg, "  "); strcat(msg, tbuf);
+        add_chat(msg, 0);
+        return 0;
+    }
+    if (strcmp(cmd, "mem") == 0) {
+        char msg[64]; char nb[16];
+        strcpy(msg, "Used: "); itoa(mem_used()/1024, nb, 10); strcat(msg, nb);
+        strcat(msg, "K / "); itoa(mem_total()/1024, nb, 10); strcat(msg, nb); strcat(msg, "K");
+        add_chat(msg, 0);
+        strcpy(msg, "Free: "); itoa(mem_free()/1024, nb, 10); strcat(msg, nb); strcat(msg, "K");
+        add_chat(msg, 0);
+        return 0;
+    }
+    if (strcmp(cmd, "snake") == 0) {
+        game_snake();
+        draw_full();
+        return 0;
+    }
+    if (strcmp(cmd, "cp") == 0) {
+        char *dst = arg;
+        while (*dst && !isspace(*dst)) dst++;
+        if (*dst) { *dst = '\0'; dst++; }
+        dst = trim(dst);
+        if (arg[0] == '\0' || dst[0] == '\0') { add_chat("Usage: cp <src> <dst>", 0); return 0; }
+        if (fs_copy(arg, dst) == 0) {
+            char msg[64]; strcpy(msg, "Copied: "); strcat(msg, arg); strcat(msg, " -> "); strcat(msg, dst);
+            add_chat(msg, 0);
+        } else add_chat("Copy failed.", 0);
+        return 0;
+    }
+    if (strcmp(cmd, "mv") == 0) {
+        char *nn = arg;
+        while (*nn && !isspace(*nn)) nn++;
+        if (*nn) { *nn = '\0'; nn++; }
+        nn = trim(nn);
+        if (arg[0] == '\0' || nn[0] == '\0') { add_chat("Usage: mv <file> <newname>", 0); return 0; }
+        if (fs_rename(arg, nn) == 0) {
+            char msg[64]; strcpy(msg, "Renamed to "); strcat(msg, nn);
+            add_chat(msg, 0);
+        } else add_chat("Rename failed.", 0);
+        return 0;
+    }
+    if (strcmp(cmd, "append") == 0) {
+        char *ct = arg;
+        while (*ct && !isspace(*ct)) ct++;
+        if (*ct) { *ct = '\0'; ct++; }
+        ct = trim(ct);
+        if (arg[0] == '\0' || ct[0] == '\0') { add_chat("Usage: append <file> <text>", 0); return 0; }
+        if (fs_append(arg, ct) == 0) {
+            char msg[64]; strcpy(msg, "Appended to "); strcat(msg, arg);
+            add_chat(msg, 0);
+        } else add_chat("Append failed.", 0);
+        return 0;
+    }
+    if (strcmp(cmd, "history") == 0) {
+        int start = gui_hist_count > GUI_HIST_SIZE ? gui_hist_count - GUI_HIST_SIZE : 0;
+        for (int i = start; i < gui_hist_count; i++) {
+            char msg[INPUT_MAX + 8]; char nb[8];
+            itoa(i + 1, nb, 10);
+            strcpy(msg, nb); strcat(msg, ": "); strcat(msg, gui_history[i % GUI_HIST_SIZE]);
+            add_chat(msg, 0);
+        }
+        return 0;
+    }
 
     /* Unknown */
     char msg[64]; strcpy(msg, "Unknown: "); strcat(msg, cmd);
@@ -613,12 +704,15 @@ void gui_run(void) {
 
     uint32_t last_status_tick = 0;
 
+    gui_hist_pos = gui_hist_count;
+
     while (1) {
         char c = keyboard_getchar();
 
         if (c == '\n') {
             char *cmd = trim(input_buf);
             if (cmd[0] != '\0') {
+                gui_hist_add(cmd);
                 int result = gui_process_cmd(cmd);
 
                 draw_sidebar();
@@ -629,7 +723,6 @@ void gui_run(void) {
                     screen_fill_rect(0, 0, H-1, W-1, ' ', VGA_WHITE, VGA_BLACK);
                     screen_put_str_at(10, 28, "Shutting down...", VGA_YELLOW, VGA_BLACK);
 
-                    /* Fade-out effect with block chars */
                     for (int r = 0; r < H; r++) {
                         for (int c2 = 0; c2 < W; c2++)
                             screen_put_char_at(r, c2, (char)BLOCK_LIGHT, VGA_DARK_GREY, VGA_BLACK);
@@ -656,12 +749,36 @@ void gui_run(void) {
             }
             input_pos = 0;
             input_buf[0] = '\0';
+            gui_hist_pos = gui_hist_count;
             draw_input();
         }
         else if (c == '\b') {
             if (input_pos > 0) {
                 input_pos--;
                 input_buf[input_pos] = '\0';
+                draw_input();
+            }
+        }
+        else if ((uint8_t)c == KEY_UP) {
+            /* Command history: previous */
+            if (gui_hist_pos > 0 && gui_hist_pos > gui_hist_count - GUI_HIST_SIZE) {
+                gui_hist_pos--;
+                strcpy(input_buf, gui_history[gui_hist_pos % GUI_HIST_SIZE]);
+                input_pos = strlen(input_buf);
+                draw_input();
+            }
+        }
+        else if ((uint8_t)c == KEY_DOWN) {
+            /* Command history: next */
+            if (gui_hist_pos < gui_hist_count - 1) {
+                gui_hist_pos++;
+                strcpy(input_buf, gui_history[gui_hist_pos % GUI_HIST_SIZE]);
+                input_pos = strlen(input_buf);
+                draw_input();
+            } else {
+                gui_hist_pos = gui_hist_count;
+                input_buf[0] = '\0';
+                input_pos = 0;
                 draw_input();
             }
         }

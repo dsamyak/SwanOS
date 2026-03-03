@@ -206,11 +206,43 @@ void vga_gfx_init(void) {
     vga_clear(0);
 }
 
+/* Restore standard VGA text-mode DAC palette (16 colors) */
+static void restore_text_palette(void) {
+    /* Standard VGA DAC values (6-bit per channel, 0-63) */
+    static const uint8_t vga_dac[16][3] = {
+        { 0,  0,  0},  /*  0: black        */
+        { 0,  0, 42},  /*  1: blue         */
+        { 0, 42,  0},  /*  2: green        */
+        { 0, 42, 42},  /*  3: cyan         */
+        {42,  0,  0},  /*  4: red          */
+        {42,  0, 42},  /*  5: magenta      */
+        {42, 21,  0},  /*  6: brown        */
+        {42, 42, 42},  /*  7: light grey   */
+        {21, 21, 21},  /*  8: dark grey    */
+        {21, 21, 63},  /*  9: light blue   */
+        {21, 63, 21},  /* 10: light green  */
+        {21, 63, 63},  /* 11: light cyan   */
+        {63, 21, 21},  /* 12: light red    */
+        {63, 21, 63},  /* 13: light magenta*/
+        {63, 63, 21},  /* 14: yellow       */
+        {63, 63, 63},  /* 15: white        */
+    };
+    for (int i = 0; i < 16; i++) {
+        outb(VGA_DAC_WRITE_IDX, i);
+        outb(VGA_DAC_DATA, vga_dac[i][0]);
+        outb(VGA_DAC_DATA, vga_dac[i][1]);
+        outb(VGA_DAC_DATA, vga_dac[i][2]);
+    }
+}
+
 void vga_gfx_exit(void) {
     write_regs(m03_misc, m03_seq, 5, m03_crtc, 25, m03_gc, 9, m03_ac, 21);
 
     /* Restore the BIOS font to VGA plane 2 */
     restore_font();
+
+    /* Restore standard text-mode DAC palette (fixes black screen) */
+    restore_text_palette();
 
     /* Clear the text buffer */
     uint16_t *tb = (uint16_t *)0xB8000;
@@ -286,7 +318,7 @@ void vga_fade_from_black(int speed_ms) {
 }
 
 void vga_fade_to_black(int speed_ms) {
-    uint8_t cur[256 * 3];
+    static uint8_t cur[256 * 3];
     outb(VGA_DAC_READ_IDX, 0);
     for (int i = 0; i < 256 * 3; i++) cur[i] = inb(VGA_DAC_DATA);
     for (int step = 32; step >= 0; step--) {

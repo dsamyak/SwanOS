@@ -52,15 +52,25 @@ char *strchr(const char *s, int c) {
 }
 
 void *memset(void *ptr, int val, size_t n) {
-    unsigned char *p = (unsigned char *)ptr;
-    for (size_t i = 0; i < n; i++) p[i] = (unsigned char)val;
+    /* Use x86 rep stosb for fast fill */
+    __asm__ volatile (
+        "rep stosb"
+        : "+D"(ptr), "+c"(n)
+        : "a"((uint8_t)val)
+        : "memory"
+    );
     return ptr;
 }
 
 void *memcpy(void *dst, const void *src, size_t n) {
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    /* Use x86 rep movsb for fast copy */
+    void *d = dst;
+    __asm__ volatile (
+        "rep movsb"
+        : "+D"(d), "+S"(src), "+c"(n)
+        :
+        : "memory"
+    );
     return dst;
 }
 
@@ -69,12 +79,15 @@ void itoa(int num, char *buf, int base) {
     int i = 0, neg = 0;
 
     if (num == 0) { buf[0] = '0'; buf[1] = '\0'; return; }
-    if (num < 0 && base == 10) { neg = 1; num = -num; }
+    if (num < 0 && base == 10) { neg = 1; }
 
-    while (num > 0) {
-        int rem = num % base;
+    /* Use unsigned to avoid overflow when num == INT_MIN */
+    unsigned int unum = neg ? (unsigned int)(-(num + 1)) + 1u : (unsigned int)num;
+
+    while (unum > 0) {
+        unsigned int rem = unum % (unsigned int)base;
         tmp[i++] = (rem < 10) ? '0' + rem : 'a' + rem - 10;
-        num /= base;
+        unum /= (unsigned int)base;
     }
     if (neg) tmp[i++] = '-';
 

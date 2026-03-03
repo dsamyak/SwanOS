@@ -2,6 +2,7 @@
  * SwanOS — PS/2 Keyboard Driver
  * IRQ1 handler, scancode→ASCII translation, line buffer.
  * Also accepts input from serial port (for GUI frontend).
+ * Arrow keys emit special codes: 0x80=UP 0x81=DOWN 0x82=LEFT 0x83=RIGHT
  * ============================================================ */
 
 #include "keyboard.h"
@@ -35,6 +36,14 @@ static const char scancode_to_ascii_shift[128] = {
     '*', 0, ' ',
 };
 
+static void kb_push(char c) {
+    int next = (kb_head + 1) % KB_BUFFER_SIZE;
+    if (next != kb_tail) {
+        kb_buffer[kb_head] = c;
+        kb_head = next;
+    }
+}
+
 static void keyboard_callback(registers_t *regs) {
     (void)regs;
     uint8_t scancode = inb(0x60);
@@ -46,6 +55,12 @@ static void keyboard_callback(registers_t *regs) {
     /* Ignore key releases (bit 7 set) */
     if (scancode & 0x80) return;
 
+    /* Arrow keys → special codes */
+    if (scancode == 0x48) { kb_push((char)0x80); return; } /* Up    */
+    if (scancode == 0x50) { kb_push((char)0x81); return; } /* Down  */
+    if (scancode == 0x4B) { kb_push((char)0x82); return; } /* Left  */
+    if (scancode == 0x4D) { kb_push((char)0x83); return; } /* Right */
+
     char c;
     if (scancode < 128) {
         c = shift_pressed ? scancode_to_ascii_shift[scancode] : scancode_to_ascii[scancode];
@@ -54,13 +69,7 @@ static void keyboard_callback(registers_t *regs) {
     }
 
     if (c == 0) return;
-
-    /* Add to circular buffer */
-    int next = (kb_head + 1) % KB_BUFFER_SIZE;
-    if (next != kb_tail) {
-        kb_buffer[kb_head] = c;
-        kb_head = next;
-    }
+    kb_push(c);
 }
 
 void keyboard_init(void) {
@@ -93,6 +102,10 @@ void keyboard_init(void) {
 
 
     register_interrupt_handler(33, keyboard_callback); /* IRQ1 → INT 33 */
+}
+
+int keyboard_has_key(void) {
+    return (kb_head != kb_tail) || serial_data_ready();
 }
 
 char keyboard_getchar(void) {

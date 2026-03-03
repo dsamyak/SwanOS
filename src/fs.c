@@ -201,3 +201,43 @@ int fs_mkdir(const char *path) {
 int fs_exists(const char *path) {
     return find_node(path) >= 0;
 }
+
+int fs_copy(const char *src, const char *dst) {
+    int si = find_node(src);
+    if (si < 0 || nodes[si].is_dir) return -1;
+
+    char content[FS_MAX_CONTENT];
+    strncpy(content, nodes[si].content, FS_MAX_CONTENT - 1);
+    content[FS_MAX_CONTENT - 1] = '\0';
+
+    return fs_write(dst, content);
+}
+
+int fs_rename(const char *path, const char *newname) {
+    int idx = find_node(path);
+    if (idx <= 0) return -1; /* Can't rename root or not found */
+    if (strlen(newname) >= FS_MAX_NAME) return -1;
+    strcpy(nodes[idx].name, newname);
+    return 0;
+}
+
+int fs_append(const char *path, const char *content) {
+    int idx = find_node(path);
+    if (idx < 0) {
+        /* Create the file */
+        return fs_write(path, content);
+    }
+    if (nodes[idx].is_dir) return -1;
+
+    int cur_len = strlen(nodes[idx].content);
+    int add_len = strlen(content);
+    if (cur_len + add_len >= FS_MAX_CONTENT - 1) {
+        /* Truncate to fit */
+        add_len = FS_MAX_CONTENT - 1 - cur_len;
+        if (add_len <= 0) return -1;
+    }
+    strncpy(nodes[idx].content + cur_len, content, add_len);
+    nodes[idx].content[cur_len + add_len] = '\0';
+    nodes[idx].size = cur_len + add_len;
+    return 0;
+}

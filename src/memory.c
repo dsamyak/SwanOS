@@ -35,3 +35,15 @@ void kfree(void *ptr) {
     /* Bump allocator — no free support */
     (void)ptr;
 }
+
+uint32_t mem_used(void) {
+    return heap_ptr - HEAP_START;
+}
+
+uint32_t mem_free(void) {
+    return HEAP_START + HEAP_SIZE - heap_ptr;
+}
+
+uint32_t mem_total(void) {
+    return HEAP_SIZE;
+}

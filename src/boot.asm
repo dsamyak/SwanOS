@@ -27,6 +27,10 @@ global _start
 extern kernel_main
 
 _start:
+    ; Save multiboot registers before GDT clobbers eax
+    mov ecx, eax            ; save multiboot magic
+    mov edx, ebx            ; save multiboot info pointer
+
     ; Load our GDT
     lgdt [gdt_descriptor]
 
@@ -43,8 +47,8 @@ _start:
     mov ss, ax
 
     mov esp, stack_top      ; set up stack
-    push ebx                ; push multiboot info pointer
-    push eax                ; push multiboot magic
+    push edx                ; push multiboot info pointer (saved from ebx)
+    push ecx                ; push multiboot magic (saved from eax)
     call kernel_main        ; jump to C kernel
     cli                     ; disable interrupts
 .hang:

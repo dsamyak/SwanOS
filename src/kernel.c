@@ -355,11 +355,11 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
     timer_init(100);
     boot_status("PIT timer initialized (100 Hz)");
 
-    keyboard_init();
-    boot_status("PS/2 keyboard driver loaded");
-
     serial_init();
     boot_status("COM1 serial port initialized");
+
+    keyboard_init();
+    boot_status("PS/2 keyboard driver loaded");
 
     memory_init();
     boot_status("Memory allocator ready (4 MB heap)");

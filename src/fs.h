@@ -22,5 +22,9 @@ int  fs_write(const char *path, const char *content);
 int  fs_delete(const char *path);
 int  fs_mkdir(const char *path);
 int  fs_exists(const char *path);
+int  fs_copy(const char *src, const char *dst);
+int  fs_rename(const char *path, const char *newname);
+int  fs_append(const char *path, const char *content);
 
 #endif
+
