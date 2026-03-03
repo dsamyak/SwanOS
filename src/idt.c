@@ -66,8 +66,10 @@ static void pic_remap(void) {
     outb(0xA1, 0x02); io_wait();
     outb(0x21, 0x01); io_wait();
     outb(0xA1, 0x01); io_wait();
-    outb(0x21, 0x00); io_wait(); /* Unmask all */
-    outb(0xA1, 0x00); io_wait();
+    /* Unmask only Timer (0), Keyboard (1), Cascade (2), and COM1 (4).
+       Mask is 11101000b = 0xE8. Slave PIC is fully masked (0xFF) */
+    outb(0x21, 0xE8); io_wait(); 
+    outb(0xA1, 0xFF); io_wait();
 }
 
 void idt_init(void) {

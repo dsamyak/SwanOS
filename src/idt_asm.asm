@@ -22,7 +22,9 @@ isr_common_stub:
     mov fs, ax
     mov gs, ax
 
+    push esp            ; pass pointer to registers_t
     call isr_handler
+    add esp, 4          ; clean up argument
 
     pop eax             ; restore data segment
     mov ds, ax
@@ -46,7 +48,9 @@ irq_common_stub:
     mov fs, ax
     mov gs, ax
 
+    push esp            ; pass pointer to registers_t
     call irq_handler
+    add esp, 4          ; clean up argument
 
     pop eax
     mov ds, ax

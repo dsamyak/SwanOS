@@ -1,8 +1,12 @@
 /* ============================================================
  * SwanOS — Serial Port Driver (COM1)
- * Used to communicate with the host-side LLM bridge.
- * Protocol: send query ending with \x04 (EOT), read response
- *           ending with \x04 (EOT).
+ * Used to communicate with the host-side Python GUI + LLM bridge.
+ *
+ * Protocol (GUI integration):
+ *   Kernel → GUI:  Regular text output (screen mirroring)
+ *   Kernel → GUI:  \x01Q + query text + \x04   (LLM query)
+ *   GUI → Kernel:  Keystroke characters
+ *   GUI → Kernel:  LLM response text + \x04
  * ============================================================ */
 
 #include "serial.h"
@@ -29,17 +33,42 @@ static int serial_data_available(void) {
     return inb(COM1 + 5) & 0x01;
 }
 
+/* ── Raw output (for screen mirroring) ───────────────────── */
+
+void serial_putchar(char c) {
+    while (!serial_transmit_ready());
+    outb(COM1, c);
+}
+
+void serial_puts(const char *str) {
+    while (*str) {
+        serial_putchar(*str++);
+    }
+}
+
+/* ── Protocol output (for LLM queries) ───────────────────── */
+
 void serial_write_char(char c) {
     while (!serial_transmit_ready());
     outb(COM1, c);
 }
 
 void serial_write(const char *str) {
+    /* Send LLM query marker: \x01Q */
+    serial_write_char('\x01');
+    serial_write_char('Q');
+
     while (*str) {
         serial_write_char(*str++);
     }
     /* Send EOT marker so bridge knows the message is complete */
     serial_write_char('\x04');
+}
+
+/* ── Input ───────────────────────────────────────────────── */
+
+int serial_data_ready(void) {
+    return serial_data_available();
 }
 
 char serial_read_char(void) {

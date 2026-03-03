@@ -1,12 +1,14 @@
 /* ============================================================
  * SwanOS — PS/2 Keyboard Driver
- * IRQ1 handler, scancode→ASCII translation, line buffer
+ * IRQ1 handler, scancode→ASCII translation, line buffer.
+ * Also accepts input from serial port (for GUI frontend).
  * ============================================================ */
 
 #include "keyboard.h"
 #include "idt.h"
 #include "ports.h"
 #include "screen.h"
+#include "serial.h"
 
 #define KB_BUFFER_SIZE 256
 
@@ -64,17 +66,63 @@ static void keyboard_callback(registers_t *regs) {
 void keyboard_init(void) {
     kb_head = 0;
     kb_tail = 0;
+
+    /* Flush the PS/2 output buffer */
+    while (inb(0x64) & 1) {
+        inb(0x60);
+    }
+
+    /* Enable first PS/2 port */
+    outb(0x64, 0xAE);
+    io_wait();
+
+    /* Read PS/2 configuration byte */
+    outb(0x64, 0x20);
+    io_wait();
+    uint8_t status = inb(0x60);
+
+    /* Enable port 1 interrupt (bit 0) and translation (bit 6).
+       Clear bit 4 (disable keyboard port) */
+    status |= 0x41;
+    status &= ~0x10;
+
+    /* Write PS/2 configuration byte */
+    outb(0x64, 0x60);
+    io_wait();
+    outb(0x60, status);
+
+
     register_interrupt_handler(33, keyboard_callback); /* IRQ1 → INT 33 */
 }
 
 char keyboard_getchar(void) {
-    /* Busy-wait for a character */
-    while (kb_head == kb_tail) {
+    /* Check both PS/2 buffer AND serial port for input */
+    while (1) {
+        /* Check PS/2 keyboard buffer */
+        if (kb_head != kb_tail) {
+            char c = kb_buffer[kb_tail];
+            kb_tail = (kb_tail + 1) % KB_BUFFER_SIZE;
+            return c;
+        }
+
+        /* Check serial port for GUI input */
+        if (serial_data_ready()) {
+            char c = serial_read_char();
+            /* Ignore control chars used by protocol, except common ones */
+            if (c == '\x01') {
+                /* Protocol marker — skip (shouldn't come from GUI input) */
+                continue;
+            }
+            if (c == '\x04') {
+                /* EOT — ignore in keyboard context */
+                continue;
+            }
+            if (c == '\r') c = '\n'; /* normalize CR to LF */
+            return c;
+        }
+
         __asm__ volatile ("hlt"); /* halt until next interrupt */
     }
-    char c = kb_buffer[kb_tail];
-    kb_tail = (kb_tail + 1) % KB_BUFFER_SIZE;
-    return c;
 }
 
 int keyboard_read_line(char *buf, int max_len) {

@@ -40,7 +40,20 @@ enum vga_color {
 #define BLOCK_MED   177  /* ▒ */
 #define BLOCK_LIGHT 176  /* ░ */
 #define ARROW_RIGHT 16   /* ► */
+#define ARROW_LEFT  17   /* ◄ */
+#define ARROW_UP    30   /* ▲ */
+#define ARROW_DOWN  31   /* ▼ */
 #define BULLET      254  /* ■ */
+#define DIAMOND     4    /* ♦ */
+#define HEART       3    /* ♥ */
+#define SPADE       6    /* ♠ */
+#define CIRCLE      9    /* ○ */
+#define DOT         250  /* · */
+#define BLOCK_HALF  221  /* ▌ (left half block) */
+#define SHADE_TOP   223  /* ▀ (upper half block) */
+#define SHADE_BOT   220  /* ▄ (lower half block) */
+#define STAR        15   /* ☼ */
+#define NOTE        14   /* ♫ */
 
 void screen_init(void);
 void screen_clear(void);
@@ -63,5 +76,7 @@ void screen_draw_box(int r1, int c1, int r2, int c2, uint8_t fg, uint8_t bg, int
 void screen_set_cursor(int row, int col);
 void screen_hide_cursor(void);
 void screen_show_cursor(void);
+void screen_delay(int ms);
+void screen_set_serial_mirror(int enable);
 
 #endif

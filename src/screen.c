@@ -1,11 +1,13 @@
 /* ============================================================
  * SwanOS — VGA Text Mode Driver
- * 80×25, 16 colors, hardware cursor, positioned drawing
+ * 80×25, 16 colors, hardware cursor, positioned drawing.
+ * Now also mirrors all output to serial port for GUI frontend.
  * ============================================================ */
 
 #include "screen.h"
 #include "ports.h"
 #include "string.h"
+#include "serial.h"
 
 #define VGA_WIDTH  80
 #define VGA_HEIGHT 25
@@ -14,6 +16,9 @@
 static int cursor_row = 0;
 static int cursor_col = 0;
 static uint8_t current_color = 0x0F;
+
+/* Serial mirroring: when enabled, all screen output mirrors to serial */
+static int serial_mirror = 1;
 
 static inline uint16_t vga_entry(char c, uint8_t color) {
     return (uint16_t)(unsigned char)c | ((uint16_t)color << 8);
@@ -50,6 +55,29 @@ void screen_clear(void) {
 
 void screen_set_color(uint8_t fg, uint8_t bg) {
     current_color = (bg << 4) | (fg & 0x0F);
+
+    /* Send ANSI color escape to serial for GUI rendering */
+    if (serial_mirror) {
+        /* Map VGA colors to ANSI: \x1b[38;5;<n>m for fg */
+        /* Simplified: send \x1b[<fg>;<bg>m */
+        serial_putchar('\x1b');
+        serial_putchar('[');
+        /* Convert VGA fg to rough ANSI 30-37 + 90-97 */
+        static const uint8_t vga_to_ansi[] = {
+            30, 34, 32, 36, 31, 35, 33, 37, /* 0-7: dark */
+            90, 94, 92, 96, 91, 95, 93, 97  /* 8-15: bright */
+        };
+        uint8_t a_fg = vga_to_ansi[fg & 0x0F];
+        /* Simple: just send fg color code */
+        if (a_fg >= 90) {
+            serial_putchar('0' + (a_fg / 10));
+            serial_putchar('0' + (a_fg % 10));
+        } else {
+            serial_putchar('0' + (a_fg / 10));
+            serial_putchar('0' + (a_fg % 10));
+        }
+        serial_putchar('m');
+    }
 }
 
 void screen_putchar(char c) {
@@ -63,6 +91,11 @@ void screen_putchar(char c) {
     if (cursor_col >= VGA_WIDTH) { cursor_col = 0; cursor_row++; }
     scroll();
     update_cursor();
+
+    /* Mirror to serial */
+    if (serial_mirror) {
+        serial_putchar(c);
+    }
 }
 
 void screen_print(const char *str) {
@@ -87,6 +120,7 @@ void screen_print_at(const char *str, int row, int col) {
 void screen_newline(void) {
     cursor_col = 0; cursor_row++;
     scroll(); update_cursor();
+    if (serial_mirror) serial_putchar('\n');
 }
 
 void screen_backspace(void) {
@@ -94,6 +128,7 @@ void screen_backspace(void) {
     else if (cursor_row > 0) { cursor_row--; cursor_col = VGA_WIDTH - 1; }
     VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = vga_entry(' ', current_color);
     update_cursor();
+    if (serial_mirror) serial_putchar('\b');
 }
 
 int screen_get_row(void) { return cursor_row; }
@@ -105,6 +140,7 @@ void screen_put_char_at(int row, int col, char c, uint8_t fg, uint8_t bg) {
     if (row < 0 || row >= VGA_HEIGHT || col < 0 || col >= VGA_WIDTH) return;
     uint8_t color = (bg << 4) | (fg & 0x0F);
     VGA_MEMORY[row * VGA_WIDTH + col] = vga_entry(c, color);
+    /* Don't mirror positioned drawing to serial — it's VGA GUI-only */
 }
 
 void screen_put_str_at(int row, int col, const char *str, uint8_t fg, uint8_t bg) {
@@ -169,4 +205,18 @@ void screen_show_cursor(void) {
     outb(0x3D5, (inb(0x3D5) & 0xC0) | 13); /* cursor start scanline */
     outb(0x3D4, 0x0B);
     outb(0x3D5, (inb(0x3D5) & 0xE0) | 15); /* cursor end scanline */
+}
+
+/* Approximate millisecond delay using busy loop */
+void screen_delay(int ms) {
+    for (int i = 0; i < ms; i++) {
+        for (volatile int j = 0; j < 4000; j++) {
+            __asm__ volatile ("nop");
+        }
+    }
+}
+
+/* Enable/disable serial mirroring */
+void screen_set_serial_mirror(int enable) {
+    serial_mirror = enable;
 }
