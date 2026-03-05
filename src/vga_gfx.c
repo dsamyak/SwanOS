@@ -206,32 +206,34 @@ void vga_gfx_init(void) {
     vga_clear(0);
 }
 
-/* Restore standard VGA text-mode DAC palette (16 colors) */
+/* Restore standard VGA text-mode DAC palette.
+ * Text mode AC maps: colors 0-5 → DAC 0-5, color 6 → DAC 0x14,
+ * color 7 → DAC 7, colors 8-15 → DAC 0x38-0x3F.
+ * We must write to the ACTUAL DAC indices the AC references. */
 static void restore_text_palette(void) {
-    /* Standard VGA DAC values (6-bit per channel, 0-63) */
-    static const uint8_t vga_dac[16][3] = {
-        { 0,  0,  0},  /*  0: black        */
-        { 0,  0, 42},  /*  1: blue         */
-        { 0, 42,  0},  /*  2: green        */
-        { 0, 42, 42},  /*  3: cyan         */
-        {42,  0,  0},  /*  4: red          */
-        {42,  0, 42},  /*  5: magenta      */
-        {42, 21,  0},  /*  6: brown        */
-        {42, 42, 42},  /*  7: light grey   */
-        {21, 21, 21},  /*  8: dark grey    */
-        {21, 21, 63},  /*  9: light blue   */
-        {21, 63, 21},  /* 10: light green  */
-        {21, 63, 63},  /* 11: light cyan   */
-        {63, 21, 21},  /* 12: light red    */
-        {63, 21, 63},  /* 13: light magenta*/
-        {63, 63, 21},  /* 14: yellow       */
-        {63, 63, 63},  /* 15: white        */
+    static const struct { uint8_t idx, r, g, b; } dac_map[16] = {
+        { 0x00,  0,  0,  0},  /*  0: black         */
+        { 0x01,  0,  0, 42},  /*  1: blue          */
+        { 0x02,  0, 42,  0},  /*  2: green         */
+        { 0x03,  0, 42, 42},  /*  3: cyan          */
+        { 0x04, 42,  0,  0},  /*  4: red           */
+        { 0x05, 42,  0, 42},  /*  5: magenta       */
+        { 0x14, 42, 21,  0},  /*  6: brown  (AC→0x14) */
+        { 0x07, 42, 42, 42},  /*  7: light grey    */
+        { 0x38, 21, 21, 21},  /*  8: dark grey     */
+        { 0x39, 21, 21, 63},  /*  9: light blue    */
+        { 0x3A, 21, 63, 21},  /* 10: light green   */
+        { 0x3B, 21, 63, 63},  /* 11: light cyan    */
+        { 0x3C, 63, 21, 21},  /* 12: light red     */
+        { 0x3D, 63, 21, 63},  /* 13: light magenta */
+        { 0x3E, 63, 63, 21},  /* 14: yellow        */
+        { 0x3F, 63, 63, 63},  /* 15: white         */
     };
     for (int i = 0; i < 16; i++) {
-        outb(VGA_DAC_WRITE_IDX, i);
-        outb(VGA_DAC_DATA, vga_dac[i][0]);
-        outb(VGA_DAC_DATA, vga_dac[i][1]);
-        outb(VGA_DAC_DATA, vga_dac[i][2]);
+        outb(VGA_DAC_WRITE_IDX, dac_map[i].idx);
+        outb(VGA_DAC_DATA, dac_map[i].r);
+        outb(VGA_DAC_DATA, dac_map[i].g);
+        outb(VGA_DAC_DATA, dac_map[i].b);
     }
 }
 

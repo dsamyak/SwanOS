@@ -1,6 +1,6 @@
 /* ============================================================
  * SwanOS — Kernel Main
- * Modern graphical boot → text mode → login → shell/GUI
+ * Premium graphical boot → styled text mode → login → shell/GUI
  * ============================================================ */
 
 #include <stdint.h>
@@ -25,19 +25,16 @@ static void draw_swan_icon(int cx, int cy) {
     vga_draw_ring(cx, cy, 28, 2, 15);
 
     /* Swan body: a smooth curve inside the circle */
-    /* Body = elliptical arc in bottom-right */
     for (int y = -8; y <= 10; y++) {
         for (int x = -14; x <= 14; x++) {
-            /* Ellipse check for body */
             int ex = x - 2;
             int ey = y - 2;
             if ((ex * ex * 64 + ey * ey * 196) <= 196 * 64)
-                vga_putpixel(cx + x, cy + y, 7); /* white */
+                vga_putpixel(cx + x, cy + y, 7);
         }
     }
 
     /* Neck: smooth curve going up-left */
-    /* Using thick line segments approximating a curve */
     int neck_segs[][2] = {
         {-6, 0}, {-8, -4}, {-10, -8}, {-11, -12},
         {-10, -16}, {-8, -19}, {-5, -21},
@@ -51,7 +48,7 @@ static void draw_swan_icon(int cx, int cy) {
 
     /* Beak: small triangular accent */
     for (int i = 0; i < 5; i++) {
-        vga_draw_hline(cx + 1 + i, cy - 23, 5 - i, 19); /* cyan accent */
+        vga_draw_hline(cx + 1 + i, cy - 23, 5 - i, 19);
     }
 
     /* Eye: single dark pixel */
@@ -59,32 +56,45 @@ static void draw_swan_icon(int cx, int cy) {
     vga_putpixel(cx, cy - 23, 1);
 }
 
-/* Draw subtle background gradient */
+/* Starfield background with twinkling */
+static void draw_starfield(void) {
+    /* Seed for pseudo-random star placement */
+    uint32_t seed = 0xDEAD;
+    for (int i = 0; i < 80; i++) {
+        seed = seed * 1103515245 + 12345;
+        int x = (seed >> 16) % GFX_W;
+        seed = seed * 1103515245 + 12345;
+        int y = (seed >> 16) % GFX_H;
+        seed = seed * 1103515245 + 12345;
+        uint8_t brightness = (seed >> 16) % 4;
+        /* Different star brightnesses for depth effect */
+        uint8_t color;
+        if (brightness == 0) color = 3;       /* dim grey-blue */
+        else if (brightness == 1) color = 4;  /* medium grey */
+        else if (brightness == 2) color = 5;  /* light grey */
+        else color = 7;                        /* bright white */
+        vga_putpixel(x, y, color);
+    }
+}
+
+/* Draw subtle dark gradient background */
 static void draw_modern_bg(void) {
     for (int y = 0; y < GFX_H; y++) {
-        /* Very subtle dark gradient: darker at edges, slightly lighter in center */
-        uint8_t base = 1; /* near-black */
-        /* Radial-ish subtle gradient */
         int dy = y - GFX_H / 2;
         int dist = (dy * dy) / 200;
         if (dist > 5) dist = 5;
-        uint8_t color = base; /* keep it very dark */
-        /* Use palette indices 80-89 for subtle bg variation */
-        color = 80 + (dist < 9 ? dist : 8);
+        uint8_t color = 80 + (dist < 9 ? dist : 8);
         for (int x = 0; x < GFX_W; x++)
             vga_putpixel(x, y, color);
     }
+    /* Add starfield on top of gradient */
+    draw_starfield();
 }
 
 /* Animated loading ring spinner */
 static void draw_spinner(int cx, int cy, int r, int frame) {
     int segments = 12;
     for (int i = 0; i < segments; i++) {
-        /* Calculate segment position around the circle */
-        int angle_idx = (i * 360) / segments;
-        /* Simple trig using lookup: cos/sin approximation with integer math */
-        /* Positions pre-calculated for 12 segments (every 30 degrees) */
-        /* Using fixed offsets for 12 points on a circle */
         int dx, dy;
         switch (i) {
             case 0:  dx = 0;  dy = -r; break;
@@ -102,25 +112,22 @@ static void draw_spinner(int cx, int cy, int r, int frame) {
             default: dx = 0; dy = 0; break;
         }
 
-        /* Color: bright for the "head" segments, dim for the "tail" */
         int dist_from_head = (i - frame % segments + segments) % segments;
         uint8_t color;
         if (dist_from_head < 3)
-            color = 19 - dist_from_head; /* bright cyan */
+            color = 19 - dist_from_head;
         else if (dist_from_head < 6)
-            color = 14 - dist_from_head; /* medium */
+            color = 14 - dist_from_head;
         else
-            color = 70; /* dim */
+            color = 70;
 
-        (void)angle_idx;
         vga_fill_circle(cx + dx, cy + dy, 2, color);
     }
 }
 
-/* Draw a thin horizontal accent line */
+/* Draw a thin horizontal accent line with gradient */
 static void draw_accent_line(int y, int x1, int x2, int center) {
     for (int x = x1; x <= x2; x++) {
-        /* Gradient: fade from edges to bright center */
         int dist = (x < center) ? (center - x) : (x - center);
         int max_dist = (x2 - x1) / 2;
         uint8_t color;
@@ -135,38 +142,33 @@ static void draw_accent_line(int y, int x1, int x2, int center) {
     }
 }
 
-/* Modern loading bar */
+/* Modern loading bar with gradient fill */
 static void draw_loading_bar(int x, int y, int w, int h, int progress, int total) {
-    /* Background track */
     vga_fill_rect(x, y, w, h, 2);
 
-    /* Filled portion with gradient */
     int filled = (progress * w) / total;
     for (int i = 0; i < filled; i++) {
-        /* Gradient: blue → cyan → teal */
         uint8_t c;
         int pct = (i * 30) / w;
         if (pct > 9) pct = 9;
-        c = 10 + pct; /* cyan gradient */
+        c = 10 + pct;
         for (int j = 0; j < h; j++)
             vga_putpixel(x + i, y + j, c);
     }
 
-    /* Rounded ends: brighten the leading edge */
     if (filled > 0 && filled < w) {
         for (int j = 0; j < h; j++)
-            vga_putpixel(x + filled, y + j, 7); /* bright white edge */
+            vga_putpixel(x + filled, y + j, 7);
     }
 }
 
 static void gfx_boot_splash(void) {
-    /* Disable serial mirroring during graphics mode */
     screen_set_serial_mirror(0);
 
     vga_gfx_init();
     vga_clear(0);
 
-    /* Draw dark gradient background */
+    /* Draw dark gradient background with starfield */
     draw_modern_bg();
 
     /* Fade in from black */
@@ -178,9 +180,9 @@ static void gfx_boot_splash(void) {
     int icon_cy = 55;
 
     /* Draw icon ring first, then fill */
-    vga_draw_ring(icon_cx, icon_cy, 28, 2, 3); /* dim ring first */
+    vga_draw_ring(icon_cx, icon_cy, 28, 2, 3);
     screen_delay(200);
-    vga_draw_ring(icon_cx, icon_cy, 28, 2, 15); /* cyan ring */
+    vga_draw_ring(icon_cx, icon_cy, 28, 2, 15);
     screen_delay(100);
 
     /* Swan body appears */
@@ -188,9 +190,8 @@ static void gfx_boot_splash(void) {
     screen_delay(300);
 
     /* ── Phase 2: Title text ── */
-    /* "SWANOS" in large 2x font, centered */
     const char *title = "SWANOS";
-    int title_w = 6 * 18; /* 6 chars * 18px per char at 2x */
+    int title_w = 6 * 18;
     int title_x = (GFX_W - title_w) / 2;
     int title_y = 95;
 
@@ -211,13 +212,20 @@ static void gfx_boot_splash(void) {
     const char *sub1 = "LLM-POWERED";
     int sub1_w = 11 * 9;
     int sub1_x = (GFX_W - sub1_w) / 2;
-    vga_draw_string(sub1_x, line_y + 8, sub1, 15); /* bright cyan */
+    vga_draw_string(sub1_x, line_y + 8, sub1, 15);
 
     screen_delay(80);
     const char *sub2 = "OPERATING SYSTEM";
     int sub2_w = 16 * 9;
     int sub2_x = (GFX_W - sub2_w) / 2;
-    vga_draw_string(sub2_x, line_y + 20, sub2, 5); /* light grey */
+    vga_draw_string(sub2_x, line_y + 20, sub2, 5);
+
+    /* Version badge */
+    screen_delay(60);
+    const char *ver = "V2.0";
+    int ver_w = 4 * 9;
+    int ver_x = (GFX_W - ver_w) / 2;
+    vga_draw_string(ver_x, line_y + 32, ver, 3);
 
     /* ── Phase 4: Loading spinner + bar ── */
     screen_delay(200);
@@ -226,11 +234,10 @@ static void gfx_boot_splash(void) {
     int bar_w = 160;
     int bar_h = 4;
 
-    /* "INITIALIZING" label */
     const char *lbl = "INITIALIZING";
     int lbl_w = 12 * 9;
     int lbl_x = (GFX_W - lbl_w) / 2;
-    vga_draw_string(lbl_x, bar_y - 14, lbl, 4); /* medium grey */
+    vga_draw_string(lbl_x, bar_y - 14, lbl, 4);
 
     /* Animate loading bar with spinner */
     int spinner_cx = GFX_W / 2;
@@ -238,11 +245,8 @@ static void gfx_boot_splash(void) {
     int total_steps = 40;
 
     for (int step = 0; step <= total_steps; step++) {
-        /* Update bar */
         draw_loading_bar(bar_x, bar_y, bar_w, bar_h, step, total_steps);
 
-        /* Draw spinner below bar */
-        /* First clear the spinner area */
         vga_fill_rect(spinner_cx - 16, spinner_cy - 16, 32, 32, 80);
         draw_spinner(spinner_cx, spinner_cy, 10, step);
 
@@ -252,17 +256,15 @@ static void gfx_boot_splash(void) {
 
     /* Bar complete: flash to white briefly */
     draw_loading_bar(bar_x, bar_y, bar_w, bar_h, 1, 1);
-    /* Replace label with "READY" */
     vga_fill_rect(lbl_x, bar_y - 14, lbl_w, 9, 80);
     const char *rdy = "READY";
     int rdy_w = 5 * 9;
     int rdy_x = (GFX_W - rdy_w) / 2;
-    vga_draw_string(rdy_x, bar_y - 14, rdy, 35); /* green */
+    vga_draw_string(rdy_x, bar_y - 14, rdy, 35);
 
     /* Clear spinner, show checkmark-like indicator */
     vga_fill_rect(spinner_cx - 16, spinner_cy - 16, 32, 32, 80);
-    vga_fill_circle(spinner_cx, spinner_cy, 8, 35); /* green circle */
-    /* Simple check shape */
+    vga_fill_circle(spinner_cx, spinner_cy, 8, 35);
     vga_putpixel(spinner_cx - 3, spinner_cy, 7);
     vga_putpixel(spinner_cx - 2, spinner_cy + 1, 7);
     vga_putpixel(spinner_cx - 1, spinner_cy + 2, 7);
@@ -284,45 +286,137 @@ static void gfx_boot_splash(void) {
     screen_set_serial_mirror(1);
 }
 
-/* ── Text-mode boot status ──────────────────────────────── */
+/* ── Styled Text-mode Boot Sequence ─────────────────────── */
+
+static int boot_step = 0;
+#define BOOT_TOTAL 7
+
+/* Draw the boot progress bar at the bottom */
+static void draw_boot_progress(void) {
+    int bar_row = 20;
+    int bar_col = 20;
+    int bar_width = 40;
+
+    screen_put_str_at(bar_row, 5, "Loading:", VGA_DARK_GREY, VGA_BLACK);
+
+    /* Progress background */
+    for (int i = 0; i < bar_width; i++)
+        screen_put_char_at(bar_row, bar_col + i, (char)176, VGA_DARK_GREY, VGA_BLACK);
+
+    /* Filled portion */
+    int filled = (boot_step * bar_width) / BOOT_TOTAL;
+    for (int i = 0; i < filled; i++)
+        screen_put_char_at(bar_row, bar_col + i, (char)219, VGA_CYAN, VGA_BLACK);
+
+    /* Percentage */
+    char pct_buf[8]; char tmp[8];
+    int pct = (boot_step * 100) / BOOT_TOTAL;
+    itoa(pct, tmp, 10);
+    strcpy(pct_buf, tmp);
+    strcat(pct_buf, "%");
+    screen_put_str_at(bar_row, bar_col + bar_width + 2, "     ", VGA_WHITE, VGA_BLACK);
+    screen_put_str_at(bar_row, bar_col + bar_width + 2, pct_buf, VGA_WHITE, VGA_BLACK);
+}
 
 static void boot_status(const char *msg) {
+    boot_step++;
+
+    /* Step indicator */
+    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+    screen_print("   ");
     screen_set_color(VGA_GREEN, VGA_BLACK);
-    screen_print("   [OK] ");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    screen_putchar((char)254);  /* ■ bullet */
+    screen_print(" ");
+    screen_set_color(VGA_GREEN, VGA_BLACK);
+    screen_print("OK ");
+    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+    screen_putchar((char)179);  /* │ */
+    screen_putchar(' ');
+    screen_set_color(VGA_LIGHT_GREY, VGA_BLACK);
     screen_print(msg);
     screen_print("\n");
+
+    /* Update progress bar */
+    draw_boot_progress();
+
+    /* Small delay for visual effect */
+    screen_delay(80);
+}
+
+/* ── Styled mode selection ───────────────────────────────── */
+
+static void draw_mode_card(int row, int col, int width, const char *num,
+                           const char *title, const char *desc,
+                           uint8_t accent, int selected) {
+    uint8_t border_color = selected ? accent : VGA_DARK_GREY;
+    uint8_t bg = VGA_BLACK;
+
+    /* Top border */
+    screen_put_char_at(row, col, (char)218, border_color, bg);
+    for (int i = 1; i < width - 1; i++)
+        screen_put_char_at(row, col + i, (char)196, border_color, bg);
+    screen_put_char_at(row, col + width - 1, (char)191, border_color, bg);
+
+    /* Content row 1: number + title */
+    screen_put_char_at(row + 1, col, (char)179, border_color, bg);
+    screen_put_str_at(row + 1, col + 2, num, accent, bg);
+    screen_put_str_at(row + 1, col + 5, title, VGA_WHITE, bg);
+    for (int i = 5 + (int)strlen(title); i < width - 1; i++)
+        screen_put_char_at(row + 1, col + i, ' ', VGA_WHITE, bg);
+    screen_put_char_at(row + 1, col + width - 1, (char)179, border_color, bg);
+
+    /* Content row 2: description */
+    screen_put_char_at(row + 2, col, (char)179, border_color, bg);
+    screen_put_char_at(row + 2, col + 2, (char)250, VGA_DARK_GREY, bg); /* · */
+    screen_put_str_at(row + 2, col + 4, desc, VGA_DARK_GREY, bg);
+    for (int i = 4 + (int)strlen(desc); i < width - 1; i++)
+        screen_put_char_at(row + 2, col + i, ' ', VGA_WHITE, bg);
+    screen_put_char_at(row + 2, col + width - 1, (char)179, border_color, bg);
+
+    /* Bottom border */
+    screen_put_char_at(row + 3, col, (char)192, border_color, bg);
+    for (int i = 1; i < width - 1; i++)
+        screen_put_char_at(row + 3, col + i, (char)196, border_color, bg);
+    screen_put_char_at(row + 3, col + width - 1, (char)217, border_color, bg);
 }
 
 static int select_mode(void) {
+    /* Clear progress bar area */
+    for (int r = 18; r < 25; r++)
+        screen_fill_row(r, 0, 79, ' ', VGA_WHITE, VGA_BLACK);
+
+    /* Section divider */
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
     screen_print("\n   ");
     for (int i = 0; i < 58; i++) screen_putchar((char)196);
     screen_print("\n\n");
 
+    /* Header */
     screen_set_color(VGA_CYAN, VGA_BLACK);
-    screen_print("   Select interface:\n\n");
+    screen_print("   ");
+    screen_putchar((char)254);
+    screen_print(" Select Interface\n\n");
+    screen_set_color(VGA_WHITE, VGA_BLACK);
 
-    screen_set_color(VGA_WHITE, VGA_BLACK);
-    screen_print("     ");
-    screen_set_color(VGA_CYAN, VGA_BLACK);
-    screen_print("[1]");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
-    screen_print("  GUI Mode   ");
+    /* Draw both mode cards side by side */
+    int card_row = screen_get_row();
+    draw_mode_card(card_row, 6,  32, "[1]", "GUI Mode",
+                   "Panels, sidebar, visual UI", VGA_CYAN, 1);
+    draw_mode_card(card_row, 42, 32, "[2]", "CLI Mode",
+                   "Classic command-line shell", VGA_GREEN, 1);
+
+    /* Hint */
+    screen_set_cursor(card_row + 5, 0);
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
-    screen_print("- Visual interface with panels & sidebar\n");
-
-    screen_set_color(VGA_WHITE, VGA_BLACK);
-    screen_print("     ");
-    screen_set_color(VGA_GREEN, VGA_BLACK);
-    screen_print("[2]");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
-    screen_print("  CLI Mode   ");
+    screen_print("\n   Press ");
+    screen_set_color(VGA_YELLOW, VGA_BLACK);
+    screen_print("1");
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
-    screen_print("- Classic command-line interface\n\n");
-
-    screen_set_color(VGA_CYAN, VGA_BLACK);
-    screen_print("   Press 1 or 2: ");
+    screen_print(" or ");
+    screen_set_color(VGA_YELLOW, VGA_BLACK);
+    screen_print("2");
+    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+    screen_print(" to continue: ");
     screen_set_color(VGA_WHITE, VGA_BLACK);
 
     while (1) {
@@ -336,27 +430,41 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
     (void)magic;
     (void)mboot_info;
 
-    /* ── Graphical boot splash ── */
-    screen_init();
+    /* ── Graphical boot splash (returns in text mode) ── */
     gfx_boot_splash();
 
-    /* ── Text mode initialization ── */
-    screen_set_color(VGA_CYAN, VGA_BLACK);
-    screen_print("\n   SWAN OS v2.0\n");
+    /* ── Styled boot header ── */
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
-    screen_print("   LLM-Powered Operating System\n\n");
+    screen_print("   ");
+    for (int i = 0; i < 58; i++) screen_putchar((char)205); /* ═ */
+    screen_print("\n");
+    screen_set_color(VGA_CYAN, VGA_BLACK);
+    screen_print("   ");
+    screen_putchar((char)6);  /* ♠ swan */
+    screen_print(" SWAN");
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_print("OS");
+    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+    screen_print(" v2.0  ");
+    screen_putchar((char)250); /* · */
+    screen_print("  LLM-Powered Operating System\n");
+    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+    screen_print("   ");
+    for (int i = 0; i < 58; i++) screen_putchar((char)205);
+    screen_print("\n\n");
     screen_set_color(VGA_WHITE, VGA_BLACK);
 
+    /* ── Boot subsystems with progress ── */
     boot_status("VGA display initialized");
 
     idt_init();
     boot_status("Interrupt Descriptor Table loaded");
 
     timer_init(100);
-    boot_status("PIT timer initialized (100 Hz)");
+    boot_status("PIT timer @ 100 Hz");
 
     serial_init();
-    boot_status("COM1 serial port initialized");
+    boot_status("COM1 serial port ready");
 
     keyboard_init();
     boot_status("PS/2 keyboard driver loaded");
@@ -374,10 +482,17 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
     boot_status("In-memory filesystem mounted");
 
     user_init();
-    boot_status("User manager initialized");
 
+    /* Clear progress bar and show completion */
+    for (int r = 19; r < 22; r++)
+        screen_fill_row(r, 0, 79, ' ', VGA_WHITE, VGA_BLACK);
+
+    screen_print("\n   ");
     screen_set_color(VGA_GREEN, VGA_BLACK);
-    screen_print("\n   All systems online.\n");
+    screen_putchar((char)254);
+    screen_print(" All systems online");
+    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+    screen_print("  ─  Ready\n");
     screen_set_color(VGA_WHITE, VGA_BLACK);
 
     int mode = select_mode();
@@ -386,7 +501,9 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
         if (mode == 1) {
             screen_clear();
             screen_set_color(VGA_CYAN, VGA_BLACK);
-            screen_print("\n   SWAN OS - Login\n\n");
+            screen_print("\n   ");
+            screen_putchar((char)6);
+            screen_print(" SWAN OS - Login\n\n");
             screen_set_color(VGA_WHITE, VGA_BLACK);
         }
 
@@ -397,14 +514,28 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
             gui_run();
             mode = 2;
             screen_clear();
+            screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+            screen_print("   ");
+            for (int i = 0; i < 50; i++) screen_putchar((char)196);
+            screen_print("\n");
             screen_set_color(VGA_CYAN, VGA_BLACK);
-            screen_print("\n  Switched to CLI mode.\n");
-            screen_print("  Type 'gui' to switch back.\n\n");
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Switched to CLI mode\n");
+            screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+            screen_print("   Type 'gui' to switch back\n");
+            screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+            screen_print("   ");
+            for (int i = 0; i < 50; i++) screen_putchar((char)196);
+            screen_print("\n\n");
             screen_set_color(VGA_WHITE, VGA_BLACK);
         }
 
         if (mode == 2) {
             shell_run();
+            /* Check if shell exited to switch to GUI */
+            /* shell returns normally for both login (-3) and gui (-4) */
+            /* We'll try GUI first, then fall back to mode select */
             mode = select_mode();
         }
     }
