@@ -1046,7 +1046,7 @@ static int execute_command(char *input) {
 }
 
 /* ── Main shell loop ───────────────────────────────────────── */
-void shell_run(void) {
+int shell_run(void) {
     /* Welcome banner */
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
     screen_print("   ");
@@ -1106,11 +1106,11 @@ void shell_run(void) {
         }
         if (result == -3) {
             /* Re-login */
-            return;
+            return -3;
         }
         if (result == -4) {
             /* Switch to GUI — handled by kernel_main */
-            return;
+            return -4;
         }
     }
 }

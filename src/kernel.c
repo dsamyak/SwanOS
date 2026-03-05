@@ -532,11 +532,14 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
         }
 
         if (mode == 2) {
-            shell_run();
+            int sh_ret = shell_run();
             /* Check if shell exited to switch to GUI */
-            /* shell returns normally for both login (-3) and gui (-4) */
-            /* We'll try GUI first, then fall back to mode select */
-            mode = select_mode();
+            if (sh_ret == -4) {
+                mode = 1;
+            } else {
+                /* User logged out, fall back to mode select */
+                mode = select_mode();
+            }
         }
     }
 }
