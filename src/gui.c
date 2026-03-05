@@ -367,18 +367,27 @@ static void draw_chat(void) {
 
 /* ── Input bar ────────────────────────────────────────────── */
 
+static int get_prompt_len(void) { return 8 + strlen(user_current()); }
+
 static void draw_input(void) {
     screen_fill_row(INPUT_ROW, 1, W-2, ' ', C_INPUT_FG, C_INPUT_BG);
 
-    /* Prompt: colored bracket + arrow */
-    screen_put_char_at(INPUT_ROW, 1, (char)BLOCK_FULL, VGA_CYAN, C_BG);
-    screen_put_char_at(INPUT_ROW, 2, ' ', C_INPUT_FG, C_BG);
-    screen_put_char_at(INPUT_ROW, 3, (char)ARROW_RIGHT, C_PROMPT_FG, C_BG);
-    screen_put_char_at(INPUT_ROW, 4, ' ', C_INPUT_FG, C_BG);
+    /* Rich prompt: ╠══■ user ►  */
+    int c = 1;
+    screen_put_char_at(INPUT_ROW, c++, (char)204, VGA_DARK_GREY, VGA_BLACK);
+    screen_put_char_at(INPUT_ROW, c++, (char)205, VGA_DARK_GREY, VGA_BLACK);
+    screen_put_char_at(INPUT_ROW, c++, (char)205, VGA_DARK_GREY, VGA_BLACK);
+    screen_put_char_at(INPUT_ROW, c++, (char)254, VGA_CYAN, VGA_BLACK);
+    c++;
+    screen_put_str_at(INPUT_ROW, c, user_current(), VGA_GREEN, VGA_BLACK);
+    c += strlen(user_current());
+    c++;
+    screen_put_char_at(INPUT_ROW, c++, (char)16, VGA_DARK_GREY, VGA_BLACK);
+    c++;
 
     /* Input text */
-    screen_put_str_at(INPUT_ROW, 5, input_buf, C_INPUT_FG, C_INPUT_BG);
-    screen_set_cursor(INPUT_ROW, 5 + input_pos);
+    screen_put_str_at(INPUT_ROW, c, input_buf, C_INPUT_FG, C_INPUT_BG);
+    screen_set_cursor(INPUT_ROW, c + input_pos);
 }
 
 /* ── Status bar ───────────────────────────────────────────── */
@@ -455,7 +464,7 @@ static void draw_full(void) {
     draw_status();
     draw_hints();
     screen_show_cursor();
-    screen_set_cursor(INPUT_ROW, 5 + input_pos);
+    screen_set_cursor(INPUT_ROW, get_prompt_len() + input_pos);
 }
 
 /* ── Command processor (GUI mode) ──────────────────────── */
@@ -481,19 +490,23 @@ static int gui_process_cmd(char *cmd) {
     if (strcmp(cmd, "clear") == 0) {
         chat_count = 0;
         chat_scroll = 0;
-        add_chat("Chat cleared.", 0);
+        add_chat(" ", 0);
+        add_chat("               [ SWAN OS v2.0 ]               ", 0);
+        add_chat(" ", 0);
         return 0;
     }
     if (strcmp(cmd, "help") == 0) {
-        add_chat("Commands:", 0);
-        add_chat("ask <q>  - Ask the AI", 0);
-        add_chat("ls/cat/write/mkdir/rm - Files", 0);
-        add_chat("calc <expr> - Calculator", 0);
-        add_chat("status - System info", 0);
-        add_chat("clear - Clear chat", 0);
-        add_chat("cli - Switch to CLI mode", 0);
-        add_chat("login - Switch user", 0);
-        add_chat("shutdown - Power off", 0);
+        add_chat("[ COMMAND REFERENCE ]", 0);
+        add_chat("  ask <q>  Ask the AI", 0);
+        add_chat("  ls       List files", 0);
+        add_chat("  cat <f>  Read files", 0);
+        add_chat("  calc     Calculator", 0);
+        add_chat("  status   System info", 0);
+        add_chat("  mem      Memory usage", 0);
+        add_chat("  clear    Clear chat", 0);
+        add_chat("  cli      Switch to CLI mode", 0);
+        add_chat("  login    Switch user", 0);
+        add_chat("  shutdown Power off", 0);
         return 0;
     }
     if (strcmp(cmd, "ask") == 0) {
@@ -503,7 +516,7 @@ static int gui_process_cmd(char *cmd) {
         }
         add_chat(arg, 1);
         draw_chat(); draw_input();
-        screen_set_cursor(INPUT_ROW, 5);
+        screen_set_cursor(INPUT_ROW, get_prompt_len());
 
         /* Show thinking indicator with animation */
         add_chat("Thinking...", 0);
@@ -793,7 +806,7 @@ void gui_run(void) {
         if (ticks - last_status_tick > 500) {
             draw_status();
             draw_sidebar();
-            screen_set_cursor(INPUT_ROW, 5 + input_pos);
+            screen_set_cursor(INPUT_ROW, get_prompt_len() + input_pos);
             last_status_tick = ticks;
         }
     }
