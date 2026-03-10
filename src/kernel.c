@@ -15,6 +15,7 @@
 #include "user.h"
 #include "shell.h"
 #include "gui.h"
+#include "gui_gfx.h"
 #include "vga_gfx.h"
 
 /* ── Modern Boot Splash ──────────────────────────────────── */
@@ -511,7 +512,7 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
         screen_print("\n");
 
         if (mode == 1) {
-            gui_run();
+            gui_gfx_run();
             mode = 2;
             screen_clear();
             screen_set_color(VGA_DARK_GREY, VGA_BLACK);
