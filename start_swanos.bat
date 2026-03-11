@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM SwanOS — One-Click Launcher
+REM SwanOS — One-Click Launcher (C++ Qt6 Edition)
 REM Just double-click this file!
 REM ============================================================
 title SwanOS
@@ -16,9 +16,22 @@ set VBOX="C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
 set VM=SwanOS
 set PIPE=\\.\pipe\swanos
 
+set GUIEXE="%~dp0swanos_gui\build\Release\swanos_gui.exe"
+set GUIEXE_DBG="%~dp0swanos_gui\build\Debug\swanos_gui.exe"
+
+REM Determine which GUI to launch
+if exist %GUIEXE% (
+    set LAUNCH=%GUIEXE%
+) else if exist %GUIEXE_DBG% (
+    set LAUNCH=%GUIEXE_DBG%
+) else (
+    echo   C++ GUI not built. Using Python fallback...
+    set LAUNCH=python "%~dp0swanos_gui.py"
+)
+
 if not exist %VBOX% (
     echo   VirtualBox not found. Starting demo...
-    python "%~dp0swanos_gui.py" --demo
+    %LAUNCH% --demo
     exit /b 0
 )
 
@@ -41,7 +54,7 @@ echo.
 echo   Launching GUI...
 echo.
 
-python "%~dp0swanos_gui.py" --pipe "%PIPE%"
+%LAUNCH% --pipe "%PIPE%"
 
 echo.
 set /p X=Power off VM? (Y/N):
