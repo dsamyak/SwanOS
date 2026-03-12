@@ -62,11 +62,11 @@ typedef struct {
 } desktop_icon_t;
 
 static desktop_icon_t icons[MAX_ICONS] = {
-    {8,   8,  "Terminal", 0},
-    {8,  44,  "Files",    1},
-    {8,  80,  "Notes",    2},
-    {8, 116,  "About",    3},
-    {8, 152,  "Snake",    4},
+    {8,   8,  "AI Chat",  5},
+    {8,  44,  "Terminal", 0},
+    {8,  80,  "Files",    1},
+    {8, 116,  "Notes",    2},
+    {8, 152,  "About",    3},
 };
 static int num_icons = 5;
 
@@ -76,6 +76,7 @@ static int num_icons = 5;
 #define WIN_FILES   1
 #define WIN_NOTES   2
 #define WIN_ABOUT   3
+#define WIN_AI      4
 
 typedef struct {
     int active;
@@ -116,10 +117,10 @@ static int start_menu_open = 0;
 #define MENU_H    (MENU_ITEMS * MENU_ITEM_H + 4)
 
 static const char *menu_labels[MENU_ITEMS] = {
-    "Terminal", "Files", "Notes", "About", "Snake",
+    "AI Chat", "Terminal", "Files", "Notes", "About",
     "--------", "Shutdown"
 };
-static int menu_app_ids[MENU_ITEMS] = {0,1,2,3,4,-1,-2};
+static int menu_app_ids[MENU_ITEMS] = {5,0,1,2,3,-1,-2};
 
 /* ── Mouse cursor save buffer ─────────────────────────────── */
 static int prev_mx = -1, prev_my = -1;
@@ -198,6 +199,15 @@ static void draw_icon_glyph(int x, int y, int app_id) {
             vga_bb_fill_rect(cx+3, cy+2, 3, 3, 32);
             vga_bb_fill_rect(cx+3, cy+5, 3, 3, 32);
             vga_bb_putpixel(cx-2, cy+3, 0);
+            break;
+        case 5: /* AI Chat: brain/sparkle icon */
+            vga_bb_fill_rect(cx-4, cy+1, 12, 10, C_CYAN);
+            vga_bb_fill_rect(cx-3, cy+2, 10, 8, C_WIN_TITLE);
+            vga_bb_draw_string(cx-2, cy+3, "AI", C_BRIGHT, C_WIN_TITLE);
+            /* Sparkle dots */
+            vga_bb_putpixel(cx+8, cy, C_GOLD);
+            vga_bb_putpixel(cx+9, cy+1, C_GOLD);
+            vga_bb_putpixel(cx-5, cy+10, C_CYAN);
             break;
     }
 }
@@ -411,16 +421,14 @@ static void draw_window(int wi) {
         int ay = cy + 4;
         vga_bb_draw_string(cx+4, ay, "SWANOS", C_CYAN, C_WIN_BG);
         ay += CHAR_H + 2;
-        vga_bb_draw_string(cx+4, ay, "Version 2.0", C_TEXT, C_WIN_BG);
+        vga_bb_draw_string(cx+4, ay, "Version 3.0", C_TEXT, C_WIN_BG);
         ay += CHAR_H + 2;
         vga_bb_draw_hline(cx+4, ay, cw-8, C_DIM);
         ay += 4;
-        vga_bb_draw_string(cx+4, ay, "LLM-Powered", C_GREEN, C_WIN_BG);
+        vga_bb_draw_string(cx+4, ay, "AI-Powered OS", C_GREEN, C_WIN_BG);
         ay += CHAR_H;
-        vga_bb_draw_string(cx+4, ay, "Bare-Metal OS", C_TEXT, C_WIN_BG);
+        vga_bb_draw_string(cx+4, ay, "Bare-Metal x86", C_TEXT, C_WIN_BG);
         ay += CHAR_H + 2;
-        vga_bb_draw_string(cx+4, ay, "Arch: x86", C_DIM, C_WIN_BG);
-        ay += CHAR_H;
         vga_bb_draw_string(cx+4, ay, "VGA 320x200", C_DIM, C_WIN_BG);
         ay += CHAR_H;
         char mb2[20]; char tmp[8];
@@ -431,6 +439,46 @@ static void draw_window(int wi) {
         ay += CHAR_H + 4;
         vga_bb_draw_string(cx+4, ay, "User: ", C_DIM, C_WIN_BG);
         vga_bb_draw_string(cx+4+6*CHAR_W, ay, user_current(), C_CYAN, C_WIN_BG);
+    }
+    else if (w->type == WIN_AI) {
+        /* AI Chat window — same layout as terminal but AI-themed */
+        vga_bb_fill_rect(cx, cy, cw, ch, 0);
+        /* Header */
+        vga_bb_fill_rect(cx, cy, cw, CHAR_H + 2, C_WIN_TITLE);
+        vga_bb_draw_string(cx+2, cy+1, "AI Assistant", C_CYAN, C_WIN_TITLE);
+        /* Chat lines */
+        int max_lines = (ch - CHAR_H * 2 - 6) / CHAR_H;
+        int start_line = 0;
+        if (w->line_count > max_lines)
+            start_line = w->line_count - max_lines;
+        int ly2 = cy + CHAR_H + 4;
+        for (int i = start_line; i < w->line_count && i < start_line + max_lines; i++) {
+            int max_ch2 = (cw - 4) / CHAR_W;
+            /* Alternate colors for user vs AI */
+            uint8_t lc = (w->lines[i][0] == '>') ? C_GREEN : C_CYAN;
+            for (int j = 0; j < max_ch2 && w->lines[i][j]; j++) {
+                vga_bb_draw_char(cx + 2 + j * CHAR_W, ly2,
+                                 w->lines[i][j], lc, 0);
+            }
+            ly2 += CHAR_H;
+        }
+        /* Input line */
+        int iy = cy + ch - CHAR_H - 1;
+        vga_bb_draw_hline(cx, iy - 1, cw, C_DIM);
+        vga_bb_draw_string(cx+1, iy, "?", C_GOLD, 0);
+        int max_in = (cw - CHAR_W * 2) / CHAR_W;
+        int s = 0;
+        if (w->input_pos > max_in) s = w->input_pos - max_in;
+        for (int i = s; i < w->input_pos; i++) {
+            vga_bb_draw_char(cx + CHAR_W + 2 + (i-s)*CHAR_W, iy,
+                             w->input[i], C_BRIGHT, 0);
+        }
+        /* Cursor blink */
+        int cur_x2 = cx + CHAR_W + 2 + (w->input_pos - s) * CHAR_W;
+        if (cur_x2 < cx + cw - 2) {
+            uint8_t cc = (timer_get_ticks() / 30) % 2 ? C_GOLD : 0;
+            vga_bb_fill_rect(cur_x2, iy, CHAR_W-1, CHAR_H-1, cc);
+        }
     }
 }
 
@@ -537,6 +585,12 @@ static void open_window(int type) {
         case WIN_ABOUT:
             strcpy(w->title, "About");
             w->x = 80; w->y = 20; w->w = 160; w->h = 140;
+            break;
+        case WIN_AI:
+            strcpy(w->title, "AI Chat");
+            w->x = 45; w->y = 5; w->w = 230; w->h = 165;
+            term_add_line(w, "SwanOS AI Assistant");
+            term_add_line(w, "Ask me anything!");
             break;
     }
 
@@ -674,8 +728,21 @@ static void term_process_cmd(window_t *w) {
             }
         }
     } else {
-        char msg[40]; strcpy(msg, "Unknown: "); strcat(msg, cmdcopy);
-        term_add_line(w, msg);
+        /* LLM-first: send unknown commands to AI */
+        term_add_line(w, "[AI] Thinking...");
+        char resp[512];
+        llm_query(w->input_pos > 0 ? cmd : cmdcopy, resp, sizeof(resp));
+        /* Remove the "Thinking" line */
+        if (w->line_count > 0) w->line_count--;
+        /* Split response */
+        char *rp = resp;
+        while (*rp) {
+            char line[40]; int li = 0;
+            while (*rp && *rp != '\n' && li < 38) line[li++] = *rp++;
+            line[li] = '\0';
+            if (li > 0) term_add_line(w, line);
+            if (*rp == '\n') rp++;
+        }
     }
 
     w->input_pos = 0;
@@ -694,8 +761,8 @@ static int handle_click(int mx, int my) {
                 start_menu_open = 0;
                 int aid = menu_app_ids[idx];
                 if (aid == -2) return -1; /* shutdown */
-                if (aid >= 0 && aid <= 3) open_window(aid);
-                if (aid == 4) return -4;  /* snake */
+                if (aid == 5) { open_window(WIN_AI); return 0; }
+                if (aid >= 0 && aid <= 4) open_window(aid);
                 return 0;
             }
         }
@@ -769,6 +836,7 @@ static int handle_click(int mx, int my) {
         desktop_icon_t *ic = &icons[i];
         if (mx >= ic->x && mx < ic->x + ICON_W &&
             my >= ic->y && my < ic->y + ICON_H) {
+            if (ic->app_id == 5) { open_window(WIN_AI); return 0; }
             if (ic->app_id == 4) return -4; /* snake */
             if (ic->app_id <= 3) open_window(ic->app_id);
             return 0;
@@ -922,6 +990,39 @@ void desktop_run(void) {
                 else if (fw->type == WIN_FILES) {
                     if ((uint8_t)c == KEY_UP && fw->file_sel > 0) fw->file_sel--;
                     if ((uint8_t)c == KEY_DOWN) fw->file_sel++;
+                }
+                else if (fw->type == WIN_AI) {
+                    if (c == '\n') {
+                        if (fw->input_pos > 0) {
+                            char echo[44]; strcpy(echo, "> "); strcat(echo, fw->input);
+                            term_add_line(fw, echo);
+                            term_add_line(fw, "[AI] ...");
+                            /* Send to LLM */
+                            char resp[512];
+                            llm_query(fw->input, resp, sizeof(resp));
+                            /* Remove thinking indicator */
+                            if (fw->line_count > 0) fw->line_count--;
+                            /* Add response lines */
+                            char *rp = resp;
+                            while (*rp) {
+                                char line[40]; int li = 0;
+                                while (*rp && *rp != '\n' && li < 38) line[li++] = *rp++;
+                                line[li] = '\0';
+                                if (li > 0) term_add_line(fw, line);
+                                if (*rp == '\n') rp++;
+                            }
+                            fw->input_pos = 0;
+                            fw->input[0] = '\0';
+                        }
+                    } else if (c == '\b') {
+                        if (fw->input_pos > 0) {
+                            fw->input_pos--;
+                            fw->input[fw->input_pos] = '\0';
+                        }
+                    } else if (c >= ' ' && fw->input_pos < 78) {
+                        fw->input[fw->input_pos++] = c;
+                        fw->input[fw->input_pos] = '\0';
+                    }
                 }
             }
         }

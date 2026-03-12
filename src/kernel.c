@@ -18,254 +18,426 @@
 #include "mouse.h"
 #include "desktop.h"
 
-/* ── Modern Boot Splash ──────────────────────────────────── */
+/* ── Advanced Boot Splash ────────────────────────────────── */
+/* Particle system, neural network nodes, pulsing rings,
+   and smooth animations for a premium LLM-OS boot. */
 
-/* Draw a minimal geometric swan icon */
-static void draw_swan_icon(int cx, int cy) {
-    /* Outer ring (brand circle) */
-    vga_draw_ring(cx, cy, 28, 2, 15);
+/* Simple pseudo-random number generator */
+static uint32_t splash_seed = 0xABCD1234;
+static uint32_t splash_rand(void) {
+    splash_seed = splash_seed * 1103515245 + 12345;
+    return (splash_seed >> 16) & 0x7FFF;
+}
 
-    /* Swan body: a smooth curve inside the circle */
-    for (int y = -8; y <= 10; y++) {
-        for (int x = -14; x <= 14; x++) {
-            int ex = x - 2;
-            int ey = y - 2;
-            if ((ex * ex * 64 + ey * ey * 196) <= 196 * 64)
-                vga_putpixel(cx + x, cy + y, 7);
+/* ── Particle system ─────────────────────────────────────── */
+#define NUM_PARTICLES 50
+typedef struct {
+    int x, y;      /* position (fixed-point: /16) */
+    int vx, vy;    /* velocity */
+    uint8_t life;  /* frames remaining */
+    uint8_t color;
+} particle_t;
+
+static particle_t particles[NUM_PARTICLES];
+static int particle_count = 0;
+
+static void spawn_particle(int cx, int cy) {
+    if (particle_count >= NUM_PARTICLES) return;
+    particle_t *p = &particles[particle_count++];
+    p->x = cx * 16;
+    p->y = cy * 16;
+    p->vx = (int)(splash_rand() % 64) - 32;
+    p->vy = (int)(splash_rand() % 64) - 32;
+    p->life = 20 + splash_rand() % 30;
+    p->color = 10 + splash_rand() % 10; /* cyan gradient */
+}
+
+static void update_particles(void) {
+    for (int i = 0; i < particle_count; i++) {
+        particles[i].x += particles[i].vx;
+        particles[i].y += particles[i].vy;
+        particles[i].vy += 1; /* gravity */
+        particles[i].life--;
+        if (particles[i].life == 0) {
+            particles[i] = particles[--particle_count];
+            i--;
+        }
+    }
+}
+
+static void draw_particles(void) {
+    for (int i = 0; i < particle_count; i++) {
+        int px = particles[i].x / 16;
+        int py = particles[i].y / 16;
+        if (px >= 0 && px < GFX_W && py >= 0 && py < GFX_H) {
+            uint8_t c = particles[i].color;
+            /* Fade with life */
+            if (particles[i].life < 10) {
+                c = 10 + particles[i].life / 3;
+            }
+            vga_putpixel(px, py, c);
+            if (px + 1 < GFX_W) vga_putpixel(px + 1, py, c);
+        }
+    }
+}
+
+/* ── Neural network nodes ─────────────────────────────────── */
+#define NUM_NODES 12
+typedef struct { int x, y; } node_t;
+
+static void draw_neural_net(int cx, int cy, int frame) {
+    /* 3 layers of nodes */
+    node_t nodes[NUM_NODES];
+    int ni = 0;
+
+    /* Layer 1 (left): 4 nodes */
+    for (int i = 0; i < 4; i++) {
+        nodes[ni].x = cx - 40;
+        nodes[ni].y = cy - 24 + i * 16;
+        ni++;
+    }
+    /* Layer 2 (center): 4 nodes */
+    for (int i = 0; i < 4; i++) {
+        nodes[ni].x = cx;
+        nodes[ni].y = cy - 24 + i * 16;
+        ni++;
+    }
+    /* Layer 3 (right): 4 nodes */
+    for (int i = 0; i < 4; i++) {
+        nodes[ni].x = cx + 40;
+        nodes[ni].y = cy - 24 + i * 16;
+        ni++;
+    }
+
+    /* Draw connections (lines between layers) */
+    for (int l1 = 0; l1 < 4; l1++) {
+        for (int l2 = 4; l2 < 8; l2++) {
+            /* Animated pulse along connection */
+            int active = ((frame + l1 * 3 + l2) % 12 < 4);
+            uint8_t lc = active ? 12 : 2;
+            /* Simple line: just horizontal + vertical segments */
+            int x1 = nodes[l1].x + 3, y1 = nodes[l1].y;
+            int x2 = nodes[l2].x - 3, y2 = nodes[l2].y;
+            int mx = (x1 + x2) / 2;
+            vga_draw_hline(x1, y1, mx - x1, lc);
+            if (y1 < y2) vga_draw_vline(mx, y1, y2 - y1, lc);
+            else if (y1 > y2) vga_draw_vline(mx, y2, y1 - y2, lc);
+            vga_draw_hline(mx, y2, x2 - mx, lc);
+        }
+    }
+    for (int l2 = 4; l2 < 8; l2++) {
+        for (int l3 = 8; l3 < 12; l3++) {
+            int active = ((frame + l2 * 2 + l3 + 6) % 12 < 4);
+            uint8_t lc = active ? 12 : 2;
+            int x1 = nodes[l2].x + 3, y1 = nodes[l2].y;
+            int x2 = nodes[l3].x - 3, y2 = nodes[l3].y;
+            int mx = (x1 + x2) / 2;
+            vga_draw_hline(x1, y1, mx - x1, lc);
+            if (y1 < y2) vga_draw_vline(mx, y1, y2 - y1, lc);
+            else if (y1 > y2) vga_draw_vline(mx, y2, y1 - y2, lc);
+            vga_draw_hline(mx, y2, x2 - mx, lc);
         }
     }
 
-    /* Neck: smooth curve going up-left */
-    int neck_segs[][2] = {
-        {-6, 0}, {-8, -4}, {-10, -8}, {-11, -12},
-        {-10, -16}, {-8, -19}, {-5, -21},
-    };
-    for (int i = 0; i < 7; i++) {
-        vga_fill_circle(cx + neck_segs[i][0], cy + neck_segs[i][1], 3, 7);
-    }
-
-    /* Head: small circle at top of neck */
-    vga_fill_circle(cx - 3, cy - 22, 4, 7);
-
-    /* Beak: small triangular accent */
-    for (int i = 0; i < 5; i++) {
-        vga_draw_hline(cx + 1 + i, cy - 23, 5 - i, 19);
-    }
-
-    /* Eye: single dark pixel */
-    vga_putpixel(cx - 1, cy - 23, 1);
-    vga_putpixel(cx, cy - 23, 1);
-}
-
-/* Starfield background with twinkling */
-static void draw_starfield(void) {
-    /* Seed for pseudo-random star placement */
-    uint32_t seed = 0xDEAD;
-    for (int i = 0; i < 80; i++) {
-        seed = seed * 1103515245 + 12345;
-        int x = (seed >> 16) % GFX_W;
-        seed = seed * 1103515245 + 12345;
-        int y = (seed >> 16) % GFX_H;
-        seed = seed * 1103515245 + 12345;
-        uint8_t brightness = (seed >> 16) % 4;
-        /* Different star brightnesses for depth effect */
-        uint8_t color;
-        if (brightness == 0) color = 3;       /* dim grey-blue */
-        else if (brightness == 1) color = 4;  /* medium grey */
-        else if (brightness == 2) color = 5;  /* light grey */
-        else color = 7;                        /* bright white */
-        vga_putpixel(x, y, color);
+    /* Draw nodes on top */
+    for (int i = 0; i < NUM_NODES; i++) {
+        int pulse = ((frame + i * 5) % 20 < 10);
+        uint8_t nc = pulse ? 15 : 12;
+        vga_fill_circle(nodes[i].x, nodes[i].y, 3, nc);
+        vga_draw_circle(nodes[i].x, nodes[i].y, 3, 10);
     }
 }
 
-/* Draw subtle dark gradient background */
-static void draw_modern_bg(void) {
+/* ── Pulsing concentric rings ─────────────────────────────── */
+static void draw_pulse_rings(int cx, int cy, int frame) {
+    for (int r = 0; r < 4; r++) {
+        int radius = 22 + r * 10 + (frame % 20) / 2;
+        if (radius > 55) radius -= 40;
+        int alpha_dist = radius - 22;
+        uint8_t c;
+        if (alpha_dist < 10) c = 13 - alpha_dist / 3;
+        else c = 2;
+        if (c < 2) c = 2;
+        vga_draw_circle(cx, cy, radius, c);
+    }
+}
+
+/* ── Gradient background for splash ───────────────────────── */
+static void draw_splash_bg(void) {
+    /* Radial gradient: dark at edges, subtly brighter at center */
+    int cx = GFX_W / 2, cy = GFX_H / 2;
     for (int y = 0; y < GFX_H; y++) {
-        int dy = y - GFX_H / 2;
-        int dist = (dy * dy) / 200;
-        if (dist > 5) dist = 5;
-        uint8_t color = 80 + (dist < 9 ? dist : 8);
-        for (int x = 0; x < GFX_W; x++)
-            vga_putpixel(x, y, color);
-    }
-    /* Add starfield on top of gradient */
-    draw_starfield();
-}
-
-/* Animated loading ring spinner */
-static void draw_spinner(int cx, int cy, int r, int frame) {
-    int segments = 12;
-    for (int i = 0; i < segments; i++) {
-        int dx, dy;
-        switch (i) {
-            case 0:  dx = 0;  dy = -r; break;
-            case 1:  dx = r/2;  dy = -(r*7)/8; break;
-            case 2:  dx = (r*7)/8; dy = -r/2; break;
-            case 3:  dx = r;  dy = 0; break;
-            case 4:  dx = (r*7)/8; dy = r/2; break;
-            case 5:  dx = r/2;  dy = (r*7)/8; break;
-            case 6:  dx = 0;  dy = r; break;
-            case 7:  dx = -r/2; dy = (r*7)/8; break;
-            case 8:  dx = -(r*7)/8; dy = r/2; break;
-            case 9:  dx = -r; dy = 0; break;
-            case 10: dx = -(r*7)/8; dy = -r/2; break;
-            case 11: dx = -r/2; dy = -(r*7)/8; break;
-            default: dx = 0; dy = 0; break;
+        for (int x = 0; x < GFX_W; x++) {
+            int dx = x - cx, dy = y - cy;
+            int dist = (dx * dx) / 100 + (dy * dy) / 40;
+            if (dist > 30) dist = 30;
+            /* Map to palette 80-85 (dark gradient) */
+            int shade = 80 + (30 - dist) / 6;
+            if (shade > 85) shade = 85;
+            if (shade < 80) shade = 80;
+            vga_putpixel(x, y, (uint8_t)shade);
         }
-
-        int dist_from_head = (i - frame % segments + segments) % segments;
-        uint8_t color;
-        if (dist_from_head < 3)
-            color = 19 - dist_from_head;
-        else if (dist_from_head < 6)
-            color = 14 - dist_from_head;
-        else
-            color = 70;
-
-        vga_fill_circle(cx + dx, cy + dy, 2, color);
+    }
+    /* Stars */
+    for (int i = 0; i < 100; i++) {
+        int sx = splash_rand() % GFX_W;
+        int sy = splash_rand() % GFX_H;
+        uint8_t sc = (splash_rand() % 4 == 0) ? 7 : (splash_rand() % 2 ? 4 : 3);
+        vga_putpixel(sx, sy, sc);
     }
 }
 
-/* Draw a thin horizontal accent line with gradient */
-static void draw_accent_line(int y, int x1, int x2, int center) {
+/* ── Glowing accent lines ─────────────────────────────────── */
+static void draw_glow_line(int y, int x1, int x2, int center) {
     for (int x = x1; x <= x2; x++) {
         int dist = (x < center) ? (center - x) : (x - center);
-        int max_dist = (x2 - x1) / 2;
-        uint8_t color;
-        if (max_dist > 0) {
-            int intensity = 10 - (dist * 8) / max_dist;
-            if (intensity < 3) intensity = 3;
-            color = 10 + (intensity < 9 ? intensity : 8);
-        } else {
-            color = 15;
+        int half = (x2 - x1) / 2;
+        if (half <= 0) half = 1;
+        int bright = 10 - (dist * 8) / half;
+        if (bright < 0) bright = 0;
+        uint8_t c = 10 + (bright < 9 ? bright : 8);
+        vga_putpixel(x, y, c);
+        /* Glow above and below */
+        if (bright > 4) {
+            if (y > 0) vga_putpixel(x, y - 1, 10 + bright / 3);
+            if (y < GFX_H - 1) vga_putpixel(x, y + 1, 10 + bright / 3);
         }
-        vga_putpixel(x, y, color);
     }
 }
 
-/* Modern loading bar with gradient fill */
-static void draw_loading_bar(int x, int y, int w, int h, int progress, int total) {
-    vga_fill_rect(x, y, w, h, 2);
+/* ── Loading bar with glow ────────────────────────────────── */
+static void draw_glow_bar(int x, int y, int w, int h, int progress, int total) {
+    /* Track background */
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
+            vga_putpixel(x + i, y + j, 2);
 
     int filled = (progress * w) / total;
     for (int i = 0; i < filled; i++) {
-        uint8_t c;
-        int pct = (i * 30) / w;
+        int pct = (i * 10) / w;
         if (pct > 9) pct = 9;
-        c = 10 + pct;
+        uint8_t c = 10 + pct;
         for (int j = 0; j < h; j++)
             vga_putpixel(x + i, y + j, c);
     }
-
+    /* Glow at the leading edge */
     if (filled > 0 && filled < w) {
-        for (int j = 0; j < h; j++)
-            vga_putpixel(x + filled, y + j, 7);
+        for (int j = -1; j <= h; j++) {
+            int py = y + j;
+            if (py >= 0 && py < GFX_H)
+                vga_putpixel(x + filled, py, 15);
+        }
     }
 }
 
+/* ── Animated spinner (ring of dots) ──────────────────────── */
+static void draw_dot_spinner(int cx, int cy, int r, int frame) {
+    int segs = 10;
+    for (int i = 0; i < segs; i++) {
+        /* Calculate position using lookup */
+        int angle_idx = (i * 36) % 360;
+        int dx = 0, dy = 0;
+        /* Simplified trig using 12 positions */
+        int pos = (i * 12) / segs;
+        switch (pos) {
+            case 0:  dx = 0;       dy = -r;     break;
+            case 1:  dx = r/2;     dy = -(r*7)/8; break;
+            case 2:  dx = (r*7)/8; dy = -r/3;   break;
+            case 3:  dx = r;       dy = 0;      break;
+            case 4:  dx = (r*7)/8; dy = r/3;    break;
+            case 5:  dx = r/2;     dy = (r*7)/8;break;
+            case 6:  dx = 0;       dy = r;      break;
+            case 7:  dx = -r/2;    dy = (r*7)/8;break;
+            case 8:  dx = -(r*7)/8;dy = r/3;    break;
+            case 9:  dx = -r;      dy = 0;      break;
+            case 10: dx = -(r*7)/8;dy = -r/3;   break;
+            case 11: dx = -r/2;    dy = -(r*7)/8;break;
+        }
+        (void)angle_idx;
+
+        int dist = (i - frame % segs + segs) % segs;
+        uint8_t c;
+        if (dist < 3) c = 15;
+        else if (dist < 5) c = 12;
+        else c = 3;
+        vga_fill_circle(cx + dx, cy + dy, 1, c);
+    }
+}
+
+/* ── Main boot splash ─────────────────────────────────────── */
 static void gfx_boot_splash(void) {
     screen_set_serial_mirror(0);
-
     vga_gfx_init();
     vga_clear(0);
 
-    /* Draw dark gradient background with starfield */
-    draw_modern_bg();
+    /* Setup special splash palette entries */
+    vga_set_palette(96, 2, 8, 20);   /* deep blue glow */
+    vga_set_palette(97, 4, 14, 30);  /* medium blue glow */
+    vga_set_palette(98, 8, 20, 40);  /* bright blue glow */
 
-    /* Fade in from black */
-    vga_fade_from_black(12);
+    int cx = GFX_W / 2;  /* 160 */
 
-    /* ── Phase 1: Swan icon appears ── */
-    screen_delay(300);
-    int icon_cx = GFX_W / 2;
-    int icon_cy = 55;
+    /* ══════ PHASE 1: Background + Particles fade in ══════ */
+    draw_splash_bg();
+    vga_fade_from_black(8);
 
-    /* Draw icon ring first, then fill */
-    vga_draw_ring(icon_cx, icon_cy, 28, 2, 3);
-    screen_delay(200);
-    vga_draw_ring(icon_cx, icon_cy, 28, 2, 15);
-    screen_delay(100);
-
-    /* Swan body appears */
-    draw_swan_icon(icon_cx, icon_cy);
-    screen_delay(300);
-
-    /* ── Phase 2: Title text ── */
-    const char *title = "SWANOS";
-    int title_w = 6 * 18;
-    int title_x = (GFX_W - title_w) / 2;
-    int title_y = 95;
-
-    /* Type each letter with a delay */
-    for (int i = 0; title[i]; i++) {
-        vga_draw_char_2x(title_x + i * 18, title_y, title[i], 7);
-        screen_delay(60);
+    /* Emit particles from center */
+    particle_count = 0;
+    for (int f = 0; f < 30; f++) {
+        if (f % 2 == 0) {
+            for (int p = 0; p < 3; p++)
+                spawn_particle(cx, 60);
+        }
+        update_particles();
+        /* Redraw bg + particles */
+        draw_splash_bg();
+        draw_particles();
+        vga_vsync();
+        screen_delay(20);
     }
 
-    /* Accent line under title */
-    screen_delay(100);
-    int line_y = title_y + 20;
-    draw_accent_line(line_y, icon_cx - 60, icon_cx + 60, icon_cx);
-    draw_accent_line(line_y + 1, icon_cx - 55, icon_cx + 55, icon_cx);
+    /* ══════ PHASE 2: Neural network animation ══════ */
+    for (int f = 0; f < 40; f++) {
+        draw_splash_bg();
+        draw_particles();
+        update_particles();
+        draw_neural_net(cx, 65, f);
 
-    /* ── Phase 3: Subtitle ── */
-    screen_delay(150);
-    const char *sub1 = "LLM-POWERED";
-    int sub1_w = 11 * 9;
-    int sub1_x = (GFX_W - sub1_w) / 2;
-    vga_draw_string(sub1_x, line_y + 8, sub1, 15);
-
-    screen_delay(80);
-    const char *sub2 = "OPERATING SYSTEM";
-    int sub2_w = 16 * 9;
-    int sub2_x = (GFX_W - sub2_w) / 2;
-    vga_draw_string(sub2_x, line_y + 20, sub2, 5);
-
-    /* Version badge */
-    screen_delay(60);
-    const char *ver = "V2.0";
-    int ver_w = 4 * 9;
-    int ver_x = (GFX_W - ver_w) / 2;
-    vga_draw_string(ver_x, line_y + 32, ver, 3);
-
-    /* ── Phase 4: Loading spinner + bar ── */
-    screen_delay(200);
-    int bar_x = (GFX_W - 160) / 2;
-    int bar_y = 170;
-    int bar_w = 160;
-    int bar_h = 4;
-
-    const char *lbl = "INITIALIZING";
-    int lbl_w = 12 * 9;
-    int lbl_x = (GFX_W - lbl_w) / 2;
-    vga_draw_string(lbl_x, bar_y - 14, lbl, 4);
-
-    /* Animate loading bar with spinner */
-    int spinner_cx = GFX_W / 2;
-    int spinner_cy = bar_y + 18;
-    int total_steps = 40;
-
-    for (int step = 0; step <= total_steps; step++) {
-        draw_loading_bar(bar_x, bar_y, bar_w, bar_h, step, total_steps);
-
-        vga_fill_rect(spinner_cx - 16, spinner_cy - 16, 32, 32, 80);
-        draw_spinner(spinner_cx, spinner_cy, 10, step);
+        /* Pulsing rings behind network */
+        draw_pulse_rings(cx, 65, f);
 
         vga_vsync();
-        screen_delay(30);
+        screen_delay(25);
     }
 
-    /* Bar complete: flash to white briefly */
-    draw_loading_bar(bar_x, bar_y, bar_w, bar_h, 1, 1);
-    vga_fill_rect(lbl_x, bar_y - 14, lbl_w, 9, 80);
-    const char *rdy = "READY";
-    int rdy_w = 5 * 9;
-    int rdy_x = (GFX_W - rdy_w) / 2;
-    vga_draw_string(rdy_x, bar_y - 14, rdy, 35);
+    /* ══════ PHASE 3: Title reveal with glow ══════ */
+    /* Clear neural net area, keep bg */
+    draw_splash_bg();
 
-    /* Clear spinner, show checkmark-like indicator */
-    vga_fill_rect(spinner_cx - 16, spinner_cy - 16, 32, 32, 80);
-    vga_fill_circle(spinner_cx, spinner_cy, 8, 35);
+    /* Draw the swan icon centered above title */
+    int icon_cy = 45;
+    /* Outer glow ring */
+    vga_draw_ring(cx, icon_cy, 30, 1, 10);
+    screen_delay(50);
+    vga_draw_ring(cx, icon_cy, 28, 2, 15);
+    screen_delay(50);
+
+    /* Swan body */
+    for (int y = -8; y <= 10; y++) {
+        for (int x = -14; x <= 14; x++) {
+            int ex = x - 2, ey = y - 2;
+            if ((ex * ex * 64 + ey * ey * 196) <= 196 * 64)
+                vga_putpixel(cx + x, icon_cy + y, 7);
+        }
+    }
+    /* Neck */
+    int neck[][2] = {{-6,0},{-8,-4},{-10,-8},{-11,-12},{-10,-16},{-8,-19},{-5,-21}};
+    for (int i = 0; i < 7; i++)
+        vga_fill_circle(cx + neck[i][0], icon_cy + neck[i][1], 3, 7);
+    /* Head + beak */
+    vga_fill_circle(cx - 3, icon_cy - 22, 4, 7);
+    for (int i = 0; i < 5; i++)
+        vga_draw_hline(cx + 1 + i, icon_cy - 23, 5 - i, 19);
+    vga_putpixel(cx - 1, icon_cy - 23, 1);
+    vga_putpixel(cx, icon_cy - 23, 1);
+    screen_delay(200);
+
+    /* Title: "SWANOS" in 3x scale for impact */
+    const char *title = "SWANOS";
+    int tw = 6 * 27; /* 3x scale: 9px * 3 per char */
+    int tx = (GFX_W - tw) / 2;
+    int ty = 82;
+    for (int i = 0; title[i]; i++) {
+        vga_draw_char_3x(tx + i * 27, ty, title[i], 7);
+        screen_delay(50);
+    }
+
+    /* Glowing accent line */
+    screen_delay(80);
+    int ly = ty + 28;
+    draw_glow_line(ly, cx - 70, cx + 70, cx);
+    draw_glow_line(ly + 1, cx - 65, cx + 65, cx);
+
+    /* ══════ PHASE 4: LLM branding ══════ */
+    screen_delay(100);
+
+    /* "ARTIFICIAL INTELLIGENCE" subtitle */
+    const char *ai1 = "ARTIFICIAL INTELLIGENCE";
+    int ai1_w = 23 * 7;
+    int ai1_x = (GFX_W - ai1_w) / 2;
+    vga_draw_string(ai1_x, ly + 6, ai1, 15);
+
+    screen_delay(60);
+    const char *ai2 = "OPERATING SYSTEM";
+    int ai2_w = 16 * 7;
+    int ai2_x = (GFX_W - ai2_w) / 2;
+    vga_draw_string(ai2_x, ly + 17, ai2, 5);
+
+    /* Version + model badge */
+    screen_delay(40);
+    const char *badge = "v3.0  |  LLM-Powered  |  x86";
+    int badge_w = 29 * 7;
+    int badge_x = (GFX_W - badge_w) / 2;
+    vga_draw_string(badge_x, ly + 30, badge, 3);
+
+    /* ══════ PHASE 5: Boot progress with spinner ══════ */
+    screen_delay(150);
+    int bar_x = (GFX_W - 180) / 2;
+    int bar_y = 168;
+    int bar_w = 180;
+    int bar_h = 3;
+
+    const char *loading_msgs[] = {
+        "Loading neural engine...",
+        "Initializing AI core...",
+        "Preparing workspace...",
+        "Starting SwanOS...",
+    };
+
+    int spinner_cx = cx;
+    int spinner_cy = bar_y + 16;
+    int total_steps = 48;
+
+    for (int step = 0; step <= total_steps; step++) {
+        /* Update loading message */
+        int msg_idx = (step * 4) / (total_steps + 1);
+        if (msg_idx > 3) msg_idx = 3;
+
+        /* Clear status text area */
+        vga_fill_rect(0, bar_y - 14, GFX_W, 10, 80);
+        int msg_w = strlen(loading_msgs[msg_idx]) * 7;
+        int msg_x = (GFX_W - msg_w) / 2;
+        vga_draw_string(msg_x, bar_y - 12, loading_msgs[msg_idx], 4);
+
+        draw_glow_bar(bar_x, bar_y, bar_w, bar_h, step, total_steps);
+
+        /* Spinner */
+        vga_fill_rect(spinner_cx - 12, spinner_cy - 12, 24, 24, 80);
+        draw_dot_spinner(spinner_cx, spinner_cy, 8, step);
+
+        /* Generate some particles near the bar for effect */
+        if (step % 6 == 0) {
+            int px = bar_x + (step * bar_w) / total_steps;
+            spawn_particle(px, bar_y);
+        }
+        update_particles();
+        draw_particles();
+
+        vga_vsync();
+        screen_delay(35);
+    }
+
+    /* ══════ PHASE 6: Completion ══════ */
+    vga_fill_rect(0, bar_y - 14, GFX_W, 10, 80);
+    const char *ready = "AI SYSTEMS ONLINE";
+    int rw = 17 * 7;
+    int rx = (GFX_W - rw) / 2;
+    vga_draw_string(rx, bar_y - 12, ready, 35);
+
+    /* Replace spinner with checkmark */
+    vga_fill_rect(spinner_cx - 12, spinner_cy - 12, 24, 24, 80);
+    vga_fill_circle(spinner_cx, spinner_cy, 7, 35);
+    /* Checkmark */
     vga_putpixel(spinner_cx - 3, spinner_cy, 7);
     vga_putpixel(spinner_cx - 2, spinner_cy + 1, 7);
     vga_putpixel(spinner_cx - 1, spinner_cy + 2, 7);
@@ -274,16 +446,24 @@ static void gfx_boot_splash(void) {
     vga_putpixel(spinner_cx + 2, spinner_cy - 1, 7);
     vga_putpixel(spinner_cx + 3, spinner_cy - 2, 7);
 
-    screen_delay(1000);
+    /* Final particle burst */
+    for (int p = 0; p < 15; p++)
+        spawn_particle(spinner_cx, spinner_cy);
+    for (int f = 0; f < 20; f++) {
+        update_particles();
+        draw_particles();
+        vga_vsync();
+        screen_delay(20);
+    }
+
+    screen_delay(800);
 
     /* Smooth fade out */
-    vga_fade_to_black(15);
+    vga_fade_to_black(10);
 
     /* Switch back to text mode */
     vga_gfx_exit();
     screen_init();
-
-    /* Re-enable serial mirroring for text mode */
     screen_set_serial_mirror(1);
 }
 
