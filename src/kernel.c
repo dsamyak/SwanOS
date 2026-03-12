@@ -14,9 +14,9 @@
 #include "fs.h"
 #include "user.h"
 #include "shell.h"
-#include "gui.h"
-#include "gui_gfx.h"
 #include "vga_gfx.h"
+#include "mouse.h"
+#include "desktop.h"
 
 /* ── Modern Boot Splash ──────────────────────────────────── */
 
@@ -290,7 +290,7 @@ static void gfx_boot_splash(void) {
 /* ── Styled Text-mode Boot Sequence ─────────────────────── */
 
 static int boot_step = 0;
-#define BOOT_TOTAL 7
+#define BOOT_TOTAL 8
 
 /* Draw the boot progress bar at the bottom */
 static void draw_boot_progress(void) {
@@ -434,6 +434,9 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
     /* ── Graphical boot splash (returns in text mode) ── */
     gfx_boot_splash();
 
+    /* Ensure clean text-mode screen */
+    screen_clear();
+
     /* ── Styled boot header ── */
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
     screen_print("   ");
@@ -472,6 +475,9 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
 
     memory_init();
     boot_status("Memory allocator ready (4 MB heap)");
+
+    mouse_init();
+    boot_status("PS/2 mouse driver loaded");
 
     fs_init();
     fs_write("readme.txt",
@@ -512,7 +518,7 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
         screen_print("\n");
 
         if (mode == 1) {
-            gui_gfx_run();
+            desktop_run();
             mode = 2;
             screen_clear();
             screen_set_color(VGA_DARK_GREY, VGA_BLACK);
