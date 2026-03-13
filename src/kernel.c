@@ -425,7 +425,11 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
     (void)magic;
     multiboot_info_t *mboot = (multiboot_info_t *)mboot_info_addr;
 
-    /* ── Graphical boot splash (returns in text mode) ── */
+    /* ── Initialize VESA framebuffer from multiboot info ── */
+    vesa_gfx_init(mboot);
+    screen_init();
+
+    /* ── Graphical boot splash ── */
     gfx_boot_splash();
 
     /* Ensure clean text-mode screen */

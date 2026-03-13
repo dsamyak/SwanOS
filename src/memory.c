@@ -11,9 +11,9 @@ static uint32_t pmm_bitmap[PMM_MAX_BLOCKS / 32];
 static uint32_t pmm_used_blocks = 0;
 static uint32_t pmm_max_blocks = PMM_MAX_BLOCKS;
 
-/* Kernel bump allocator starting at 4 MB, with 4 MB heap space */
-#define HEAP_START 0x400000   /* 4 MB */
-#define HEAP_SIZE  0x400000   /* 4 MB heap */
+/* Kernel bump allocator starting at 24 MB (past BSS backbuffer), with 8 MB heap space */
+#define HEAP_START 0x1800000  /* 24 MB — after kernel + large BSS (8MB backbuf) */
+#define HEAP_SIZE  0x800000   /* 8 MB heap */
 
 static uint32_t heap_ptr = HEAP_START;
 
@@ -25,9 +25,9 @@ void memory_init(void) {
     memset(pmm_bitmap, 0, sizeof(pmm_bitmap));
     pmm_used_blocks = 0;
 
-    /* Reserve first 8 MB for kernel + heap + VGA texts */
-    /* 8 MB = 2048 pages */
-    uint32_t reserved_pages = (HEAP_START + HEAP_SIZE) / PAGE_SIZE;
+    /* Reserve first 32 MB for kernel + BSS (8MB backbuf) + heap */
+    /* 32 MB = 8192 pages */
+    uint32_t reserved_pages = 8192;
     for (uint32_t i = 0; i < reserved_pages; i++) {
         pmm_bitmap[i / 32] |= (1 << (i % 32));
     }

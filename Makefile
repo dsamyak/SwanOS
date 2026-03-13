@@ -14,6 +14,7 @@
 # Compiler settings
 CC      = gcc
 CFLAGS  = -m32 -ffreestanding -fno-stack-protector -fno-pie -nostdlib \
+          -mno-sse -mno-sse2 -mno-mmx -mno-80387 -msoft-float \
           -Wall -Wextra -Isrc -O2
 LDFLAGS = -m elf_i386 -T linker.ld -nostdlib
 ASM     = nasm

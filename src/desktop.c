@@ -20,6 +20,7 @@
 #include "llm.h"
 #include "game.h"
 #include "ports.h"
+#include "serial.h"
 
 /* ── Layout constants ─────────────────────────────────────── */
 #define SCRW       GFX_W
@@ -871,11 +872,13 @@ static void draw_desktop(void) {
 /* ── Main desktop loop ────────────────────────────────────── */
 void desktop_run(void) {
     /* Init graphics */
+    serial_write("desktop_run: start\n");
     screen_set_serial_mirror(0xFF000000);
     //vga_gfx_init
     // setup_desktop_palette();
 
     /* Reset window state */
+    serial_write("desktop_run: init windows\n");
     memset(windows, 0, sizeof(windows));
     win_count = 0;
     win_focus = -1;
@@ -883,12 +886,21 @@ void desktop_run(void) {
     start_menu_open = 0;
     dragging = 0;
 
+    /* Add default windows */
+    serial_write("desktop_run: open_window\n");
+    open_window(WIN_ABOUT);
+    open_window(WIN_TERM);
+
     /* Initial draw */
+    serial_write("desktop_run: draw_desktop\n");
     draw_desktop();
+    serial_write("desktop_run: initial draw done\n");
     // vga_fade_from_black(8);
 
     uint32_t last_draw = 0;
     int needs_redraw = 1;
+
+    serial_write("desktop_run: enter loop\n");
 
     while (1) {
         mouse_state_t ms;

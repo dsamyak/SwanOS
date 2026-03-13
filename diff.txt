@@ -1,0 +1,346 @@
+﻿commit 24e66d3962e87ad8713bc5b776d0a5b84ca9a188
+Author: dsamyak <you@example.com>
+Date:   Fri Mar 13 20:33:54 2026 +0530
+
+    desktop added
+
+diff --git a/src/desktop.c b/src/desktop.c
+index d1f2077..952c3f9 100644
+--- a/src/desktop.c
++++ b/src/desktop.c
+@@ -22,37 +22,37 @@
+ #include "ports.h"
+ 
+ /* ΓöÇΓöÇ Layout constants ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+-#define SCRW       320
+-#define SCRH       200
+-#define TASKBAR_H  14
++#define SCRW       GFX_W
++#define SCRH       GFX_H
++#define TASKBAR_H  40
+ #define DESK_H     (SCRH - TASKBAR_H)  /* 186 */
+-#define TITLEBAR_H 11
+-#define CHAR_W     7
+-#define CHAR_H     9
++#define TITLEBAR_H 30
++#define CHAR_W     8
++#define CHAR_H     8
+ 
+ /* ΓöÇΓöÇ Palette indices (from modern palette) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+-#define C_DESK_BG    80   /* subtle dark bg */
+-#define C_TASKBAR    22   /* dark blue */
+-#define C_WIN_TITLE  20   /* window title bar blue */
+-#define C_WIN_BG     1    /* window body */
+-#define C_WIN_BORDER 3    /* border */
+-#define C_TEXT       6
+-#define C_BRIGHT     7
+-#define C_DIM        3
+-#define C_CYAN       15
+-#define C_GREEN      35
+-#define C_GOLD       45
+-#define C_RED        91
+-#define C_ICON_BG    81
+-#define C_MENU_BG    2
+-#define C_MENU_HL    20
+-#define C_CURSOR1    7    /* white */
+-#define C_CURSOR2    0    /* black outline */
+-#define C_BTN_START  25   /* start button */
++#define C_DESK_BG    0xFF1F1F2F
++#define C_TASKBAR    0xEE101015
++#define C_WIN_TITLE  0xDD20202F
++#define C_WIN_BG     0xEE151515
++#define C_WIN_BORDER 0xFF404050
++#define C_TEXT       0xFFAAAAAA
++#define C_BRIGHT     0xFFFFFFFF
++#define C_DIM        0xFF555555
++#define C_CYAN       0xFF00EEEE
++#define C_GREEN      0xFF00EE00
++#define C_GOLD       0xFFEEEE00
++#define C_RED        0xFFEE0000
++#define C_ICON_BG    0x88000000
++#define C_MENU_BG    0xEE202020
++#define C_MENU_HL    0xFF404050
++#define C_CURSOR1    0xFFFFFFFF
++#define C_CURSOR2    0xFF000000
++#define C_BTN_START  0xFF00EEEE
+ 
+ /* ΓöÇΓöÇ Icon definitions ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+-#define ICON_W     32
+-#define ICON_H     28
++#define ICON_W     64
++#define ICON_H     64
+ #define MAX_ICONS  6
+ 
+ typedef struct {
+@@ -62,11 +62,11 @@ typedef struct {
+ } desktop_icon_t;
+ 
+ static desktop_icon_t icons[MAX_ICONS] = {
+-    {8,   8,  "AI Chat",  5},
+-    {8,  44,  "Terminal", 0},
+-    {8,  80,  "Files",    1},
+-    {8, 116,  "Notes",    2},
+-    {8, 152,  "About",    3},
++    {32, 32, "AI Chat", 5},
++    {32, 128, "Terminal", 0},
++    {32, 224, "Files", 1},
++    {32, 320, "Notes", 2},
++    {32, 416, "About", 3},
+ };
+ static int num_icons = 5;
+ 
+@@ -134,16 +134,16 @@ static void term_process_cmd(window_t *w);
+ 
+ /* ΓöÇΓöÇ Desktop palette setup ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ static void setup_desktop_palette(void) {
+-    vga_set_palette(C_ICON_BG, 4, 6, 14);
+-    vga_set_palette(C_WIN_TITLE, 4, 8, 22);
+-    vga_set_palette(C_MENU_BG, 3, 5, 10);
+-    vga_set_palette(C_MENU_HL, 5, 10, 25);
+-    vga_set_palette(C_BTN_START, 3, 7, 20);
+-    vga_set_palette(C_RED, 58, 14, 14);
+-    vga_set_palette(90, 50, 10, 10);
+-    vga_set_palette(92, 12, 12, 30); /* close btn */
+-    vga_set_palette(93, 6, 15, 6);   /* green accent */
+-    vga_set_palette(94, 15, 15, 5);  /* gold accent */
++    // palette
++    // palette
++    // palette
++    // palette
++    // palette
++    // palette
++    // palette
++    // palette /* close btn */
++    // palette   /* green accent */
++    // palette  /* gold accent */
+ }
+ 
+ /* ΓöÇΓöÇ Draw wallpaper ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+@@ -173,8 +173,8 @@ static void draw_icon_glyph(int x, int y, int app_id) {
+     switch (app_id) {
+         case 0: /* Terminal: monitor shape */
+             vga_bb_fill_rect(cx-5, cy, 14, 10, C_DIM);
+-            vga_bb_fill_rect(cx-4, cy+1, 12, 8, 0);
+-            vga_bb_draw_string(cx-2, cy+2, ">_", C_GREEN, 0);
++            vga_bb_fill_rect(cx-4, cy+1, 12, 8, 0xFF000000);
++            vga_bb_draw_string(cx-2, cy+2, ">_", C_GREEN, 0xFF000000);
+             vga_bb_draw_hline(cx-1, cy+11, 6, C_DIM);
+             break;
+         case 1: /* Files: folder */
+@@ -198,7 +198,7 @@ static void draw_icon_glyph(int x, int y, int app_id) {
+             vga_bb_fill_rect(cx, cy+2, 3, 3, 32);
+             vga_bb_fill_rect(cx+3, cy+2, 3, 3, 32);
+             vga_bb_fill_rect(cx+3, cy+5, 3, 3, 32);
+-            vga_bb_putpixel(cx-2, cy+3, 0);
++            vga_bb_putpixel(cx-2, cy+3, 0xFF000000);
+             break;
+         case 5: /* AI Chat: brain/sparkle icon */
+             vga_bb_fill_rect(cx-4, cy+1, 12, 10, C_CYAN);
+@@ -297,7 +297,7 @@ static void draw_window(int wi) {
+     int focused = (wi == win_focus);
+ 
+     /* Shadow */
+-    vga_bb_fill_rect(w->x+2, w->y+2, w->w, w->h, 0);
++    vga_bb_fill_rect_alpha(w->x+8, w->y+8, w->w, w->h, 0x88000000);
+ 
+     /* Border */
+     vga_bb_fill_rect(w->x, w->y, w->w, w->h, C_WIN_BG);
+@@ -311,8 +311,8 @@ static void draw_window(int wi) {
+ 
+     /* Close button [X] */
+     int cbx = w->x + w->w - 12;
+-    vga_bb_fill_rect(cbx, w->y+2, 9, 8, 90);
+-    vga_bb_draw_string(cbx+1, w->y+2, "X", C_BRIGHT, 90);
++    vga_bb_fill_rect(cbx, w->y+6, 18, 18, 0xFFEE2222);
++    vga_bb_draw_string(cbx+4, w->y+8, "X", C_BRIGHT, 0xFFEE2222);
+ 
+     /* Content area */
+     int cx = w->x + 2;
+@@ -322,7 +322,7 @@ static void draw_window(int wi) {
+ 
+     if (w->type == WIN_TERM) {
+         /* Terminal: scrollable text output + input line */
+-        vga_bb_fill_rect(cx, cy, cw, ch, 0);
++        vga_bb_fill_rect_alpha(cx, cy, cw, ch, 0x88000000);
+         int max_lines = (ch - CHAR_H - 2) / CHAR_H;
+         int start_line = 0;
+         if (w->line_count > max_lines)
+@@ -332,20 +332,20 @@ static void draw_window(int wi) {
+             int max_ch = (cw - 4) / CHAR_W;
+             for (int j = 0; j < max_ch && w->lines[i][j]; j++) {
+                 vga_bb_draw_char(cx + 2 + j * CHAR_W, ly,
+-                                 w->lines[i][j], C_GREEN, 0);
++                                 w->lines[i][j], C_GREEN, 0x00000000);
+             }
+             ly += CHAR_H;
+         }
+         /* Input line */
+         int iy = cy + ch - CHAR_H - 1;
+         vga_bb_draw_hline(cx, iy - 1, cw, C_DIM);
+-        vga_bb_draw_string(cx+1, iy, ">", C_CYAN, 0);
++        vga_bb_draw_string(cx+1, iy, ">", C_CYAN, 0x00000000);
+         int max_in = (cw - CHAR_W * 2) / CHAR_W;
+         int s = 0;
+         if (w->input_pos > max_in) s = w->input_pos - max_in;
+         for (int i = s; i < w->input_pos; i++) {
+             vga_bb_draw_char(cx + CHAR_W + 2 + (i-s)*CHAR_W, iy,
+-                             w->input[i], C_BRIGHT, 0);
++                             w->input[i], C_BRIGHT, 0xFF000000);
+         }
+         /* Cursor blink */
+         int cur_x = cx + CHAR_W + 2 + (w->input_pos - s) * CHAR_W;
+@@ -356,7 +356,7 @@ static void draw_window(int wi) {
+     }
+     else if (w->type == WIN_FILES) {
+         /* File manager */
+-        vga_bb_fill_rect(cx, cy, cw, ch, 0);
++        vga_bb_fill_rect_alpha(cx, cy, cw, ch, 0x88000000);
+         char listing[512];
+         fs_list("/", listing, sizeof(listing));
+         char *p = listing;
+@@ -386,11 +386,11 @@ static void draw_window(int wi) {
+     }
+     else if (w->type == WIN_NOTES) {
+         /* Simple text editor */
+-        vga_bb_fill_rect(cx, cy, cw, ch, 0);
++        vga_bb_fill_rect_alpha(cx, cy, cw, ch, 0x88000000);
+         /* Header */
+-        vga_bb_draw_string(cx+2, cy+1, "File:", C_DIM, 0);
++        vga_bb_draw_string(cx+2, cy+1, "File:", C_DIM, 0xFF000000);
+         vga_bb_draw_string(cx+2+5*CHAR_W, cy+1,
+-                           w->note_file[0] ? w->note_file : "untitled", C_CYAN, 0);
++                           w->note_file[0] ? w->note_file : "untitled", C_CYAN, 0xFF000000);
+         vga_bb_draw_hline(cx, cy + CHAR_H + 2, cw, C_DIM);
+         /* Text content */
+         int ty2 = cy + CHAR_H + 4;
+@@ -404,7 +404,7 @@ static void draw_window(int wi) {
+                 tx = cx + 2;
+                 if (w->note_text[i] == '\n') continue;
+             }
+-            vga_bb_draw_char(tx, ty2, w->note_text[i], C_TEXT, 0);
++            vga_bb_draw_char(tx, ty2, w->note_text[i], C_TEXT, 0xFF000000);
+             tx += CHAR_W;
+             col++;
+         }
+@@ -414,7 +414,7 @@ static void draw_window(int wi) {
+             vga_bb_fill_rect(tx, ty2, 2, CHAR_H-1, cc);
+         }
+         /* Save hint */
+-        vga_bb_draw_string(cx+2, cy+ch-CHAR_H-1, "Ctrl+S:save", C_DIM, 0);
++        vga_bb_draw_string(cx+2, cy+ch-CHAR_H-1, "Ctrl+S:save", C_DIM, 0xFF000000);
+     }
+     else if (w->type == WIN_ABOUT) {
+         vga_bb_fill_rect(cx, cy, cw, ch, C_WIN_BG);
+@@ -442,7 +442,7 @@ static void draw_window(int wi) {
+     }
+     else if (w->type == WIN_AI) {
+         /* AI Chat window ΓÇö same layout as terminal but AI-themed */
+-        vga_bb_fill_rect(cx, cy, cw, ch, 0);
++        vga_bb_fill_rect_alpha(cx, cy, cw, ch, 0x88000000);
+         /* Header */
+         vga_bb_fill_rect(cx, cy, cw, CHAR_H + 2, C_WIN_TITLE);
+         vga_bb_draw_string(cx+2, cy+1, "AI Assistant", C_CYAN, C_WIN_TITLE);
+@@ -458,20 +458,20 @@ static void draw_window(int wi) {
+             uint8_t lc = (w->lines[i][0] == '>') ? C_GREEN : C_CYAN;
+             for (int j = 0; j < max_ch2 && w->lines[i][j]; j++) {
+                 vga_bb_draw_char(cx + 2 + j * CHAR_W, ly2,
+-                                 w->lines[i][j], lc, 0);
++                                 w->lines[i][j], lc, 0xFF000000);
+             }
+             ly2 += CHAR_H;
+         }
+         /* Input line */
+         int iy = cy + ch - CHAR_H - 1;
+         vga_bb_draw_hline(cx, iy - 1, cw, C_DIM);
+-        vga_bb_draw_string(cx+1, iy, "?", C_GOLD, 0);
++        vga_bb_draw_string(cx+1, iy, "?", C_GOLD, 0xFF000000);
+         int max_in = (cw - CHAR_W * 2) / CHAR_W;
+         int s = 0;
+         if (w->input_pos > max_in) s = w->input_pos - max_in;
+         for (int i = s; i < w->input_pos; i++) {
+             vga_bb_draw_char(cx + CHAR_W + 2 + (i-s)*CHAR_W, iy,
+-                             w->input[i], C_BRIGHT, 0);
++                             w->input[i], C_BRIGHT, 0xFF000000);
+         }
+         /* Cursor blink */
+         int cur_x2 = cx + CHAR_W + 2 + (w->input_pos - s) * CHAR_W;
+@@ -564,18 +564,18 @@ static void open_window(int type) {
+     switch (type) {
+         case WIN_TERM:
+             strcpy(w->title, "Terminal");
+-            w->x = 50; w->y = 10; w->w = 220; w->h = 150;
++            w->x = 250; w->y = 150; w->w = 800; w->h = 500;
+             term_add_line(w, "SwanOS Terminal");
+             term_add_line(w, "Type 'help'");
+             break;
+         case WIN_FILES:
+             strcpy(w->title, "Files");
+-            w->x = 60; w->y = 20; w->w = 180; w->h = 130;
++            w->x = 300; w->y = 200; w->w = 800; w->h = 500;
+             w->file_sel = 0;
+             break;
+         case WIN_NOTES:
+             strcpy(w->title, "Notes");
+-            w->x = 70; w->y = 15; w->w = 200; w->h = 140;
++            w->x = 350; w->y = 250; w->w = 800; w->h = 500;
+             strcpy(w->note_file, "notes.txt");
+             /* Try to load existing */
+             fs_read("notes.txt", w->note_text, sizeof(w->note_text) - 1);
+@@ -584,11 +584,11 @@ static void open_window(int type) {
+             break;
+         case WIN_ABOUT:
+             strcpy(w->title, "About");
+-            w->x = 80; w->y = 20; w->w = 160; w->h = 140;
++            w->x = 400; w->y = 300; w->w = 600; w->h = 400;
+             break;
+         case WIN_AI:
+             strcpy(w->title, "AI Chat");
+-            w->x = 45; w->y = 5; w->w = 230; w->h = 165;
++            w->x = 200; w->y = 100; w->w = 800; w->h = 600;
+             term_add_line(w, "SwanOS AI Assistant");
+             term_add_line(w, "Ask me anything!");
+             break;
+@@ -871,9 +871,9 @@ static void draw_desktop(void) {
+ /* ΓöÇΓöÇ Main desktop loop ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */
+ void desktop_run(void) {
+     /* Init graphics */
+-    screen_set_serial_mirror(0);
+-    vga_gfx_init();
+-    setup_desktop_palette();
++    screen_set_serial_mirror(0xFF000000);
++    //vga_gfx_init
++    // setup_desktop_palette();
+ 
+     /* Reset window state */
+     memset(windows, 0, sizeof(windows));
+@@ -885,7 +885,7 @@ void desktop_run(void) {
+ 
+     /* Initial draw */
+     draw_desktop();
+-    vga_fade_from_black(8);
++    // vga_fade_from_black(8);
+ 
+     uint32_t last_draw = 0;
+     int needs_redraw = 1;
+@@ -920,8 +920,8 @@ void desktop_run(void) {
+                 int result = handle_click(ms.x, ms.y);
+                 if (result == -1) {
+                     /* Shutdown */
+-                    vga_fade_to_black(8);
+-                    vga_gfx_exit();
++                    // vga_fade_to_black(8);
++                    //vga_gfx_exit
+                     screen_init();
+                     screen_set_serial_mirror(1);
+                     screen_clear();
+@@ -934,8 +934,8 @@ void desktop_run(void) {
+                 if (result == -4) {
+                     /* Snake game */
+                     game_snake();
+-                    vga_gfx_init();
+-                    setup_desktop_palette();
++                    //vga_gfx_init
++                    // setup_desktop_palette();
+                 }
+                 needs_redraw = 1;
+             }
