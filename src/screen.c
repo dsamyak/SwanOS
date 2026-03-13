@@ -1,74 +1,126 @@
 /* ============================================================
- * SwanOS — VGA Text Mode Driver
- * 80×25, 16 colors, hardware cursor, positioned drawing.
- * Now also mirrors all output to serial port for GUI frontend.
+ * SwanOS — VESA Text Mode CLI Driver
+ * Scaled 2x text drawing over native 1920x1080 Framebuffer.
  * ============================================================ */
 
 #include "screen.h"
-#include "ports.h"
+#include "vga_gfx.h"
 #include "string.h"
 #include "serial.h"
 
-#define VGA_WIDTH  80
-#define VGA_HEIGHT 25
-#define VGA_MEMORY ((uint16_t *)0xB8000)
+#define CHAR_W 16
+#define CHAR_H 16
+#define MAX_COLS 120 // 1920 / 16
+#define MAX_ROWS 67  // 1080 / 16
+
+typedef struct {
+    char c;
+    uint32_t fg;
+    uint32_t bg;
+} tchar_t;
+
+static tchar_t tbuf[MAX_COLS * MAX_ROWS];
+static int cols = 80;
+static int rows = 25;
 
 static int cursor_row = 0;
 static int cursor_col = 0;
-static uint8_t current_color = 0x0F;
 
-/* Serial mirroring: when enabled, all screen output mirrors to serial */
+static uint32_t current_fg = 0xFFFFFFFF;
+static uint32_t current_bg = 0xFF000000;
 static int serial_mirror = 1;
 
-static inline uint16_t vga_entry(char c, uint8_t color) {
-    return (uint16_t)(unsigned char)c | ((uint16_t)color << 8);
+static uint32_t ansi_colors[16] = {
+    0xFF000000, 0xFF0000AA, 0xFF00AA00, 0xFF00AAAA,
+    0xFFAA0000, 0xFFAA00AA, 0xFFAA5500, 0xFFAAAAAA,
+    0xFF555555, 0xFF5555FF, 0xFF55FF55, 0xFF55FFFF,
+    0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF
+};
+
+static void redraw_char(int r, int c) {
+    if (r < 0 || r >= rows || c < 0 || c >= cols) return;
+    tchar_t t = tbuf[r * cols + c];
+    vga_fill_rect(c * CHAR_W, r * CHAR_H, CHAR_W, CHAR_H, t.bg);
+    if (t.c) {
+        vga_draw_char_2x(c * CHAR_W, r * CHAR_H, t.c, t.fg);
+    }
 }
 
 static void update_cursor(void) {
-    uint16_t pos = cursor_row * VGA_WIDTH + cursor_col;
-    outb(0x3D4, 14);
-    outb(0x3D5, (uint8_t)(pos >> 8));
-    outb(0x3D4, 15);
-    outb(0x3D5, (uint8_t)(pos & 0xFF));
+    /* Draw a simple block cursor since we don't have hardware cursor */
+    /* Draw over the current char */
+    if (cursor_row >= rows || cursor_col >= cols) return;
+    tchar_t t = tbuf[cursor_row * cols + cursor_col];
+    vga_fill_rect(cursor_col * CHAR_W, cursor_row * CHAR_H, CHAR_W, CHAR_H, 0xAAAAAAAA);
+    if (t.c) {
+        vga_draw_char_2x(cursor_col * CHAR_W, cursor_row * CHAR_H, t.c, 0xFF000000);
+    }
+}
+
+static void clear_cursor(void) {
+    redraw_char(cursor_row, cursor_col);
 }
 
 static void scroll(void) {
-    if (cursor_row < VGA_HEIGHT) return;
-    for (int i = 0; i < (VGA_HEIGHT - 1) * VGA_WIDTH; i++)
-        VGA_MEMORY[i] = VGA_MEMORY[i + VGA_WIDTH];
-    for (int i = 0; i < VGA_WIDTH; i++)
-        VGA_MEMORY[(VGA_HEIGHT - 1) * VGA_WIDTH + i] = vga_entry(' ', current_color);
-    cursor_row = VGA_HEIGHT - 1;
+    if (cursor_row < rows) return;
+    clear_cursor();
+    
+    // Move buffer up
+    for (int r = 0; r < rows - 1; r++) {
+        for (int c = 0; c < cols; c++) {
+            tbuf[r * cols + c] = tbuf[(r + 1) * cols + c];
+        }
+    }
+    // Clear last line
+    for (int c = 0; c < cols; c++) {
+        tbuf[(rows - 1) * cols + c].c = ' ';
+        tbuf[(rows - 1) * cols + c].fg = current_fg;
+        tbuf[(rows - 1) * cols + c].bg = current_bg;
+    }
+    
+    // Redraw entire screen
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            redraw_char(r, c);
+        }
+    }
+    
+    cursor_row = rows - 1;
 }
 
 void screen_init(void) {
-    current_color = 0x0F;
+    cols = GFX_W / CHAR_W;
+    rows = GFX_H / CHAR_H;
+    if (cols > MAX_COLS) cols = MAX_COLS;
+    if (rows > MAX_ROWS) rows = MAX_ROWS;
+    current_fg = ansi_colors[15];
+    current_bg = ansi_colors[0];
     screen_clear();
 }
 
 void screen_clear(void) {
-    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
-        VGA_MEMORY[i] = vga_entry(' ', current_color);
+    for (int i = 0; i < cols * rows; i++) {
+        tbuf[i].c = ' ';
+        tbuf[i].fg = current_fg;
+        tbuf[i].bg = current_bg;
+    }
     cursor_row = 0; cursor_col = 0;
+    vga_clear(current_bg);
     update_cursor();
 }
 
 void screen_set_color(uint8_t fg, uint8_t bg) {
-    current_color = (bg << 4) | (fg & 0x0F);
+    current_fg = ansi_colors[fg & 0x0F];
+    current_bg = ansi_colors[bg & 0x0F];
 
-    /* Send ANSI color escape to serial for GUI rendering */
     if (serial_mirror) {
-        /* Map VGA colors to ANSI: \x1b[38;5;<n>m for fg */
-        /* Simplified: send \x1b[<fg>;<bg>m */
         serial_putchar('\x1b');
         serial_putchar('[');
-        /* Convert VGA fg to rough ANSI 30-37 + 90-97 */
         static const uint8_t vga_to_ansi[] = {
-            30, 34, 32, 36, 31, 35, 33, 37, /* 0-7: dark */
-            90, 94, 92, 96, 91, 95, 93, 97  /* 8-15: bright */
+            30, 34, 32, 36, 31, 35, 33, 37,
+            90, 94, 92, 96, 91, 95, 93, 97
         };
         uint8_t a_fg = vga_to_ansi[fg & 0x0F];
-        /* Simple: just send fg color code */
         if (a_fg >= 90) {
             serial_putchar('0' + (a_fg / 10));
             serial_putchar('0' + (a_fg % 10));
@@ -81,18 +133,22 @@ void screen_set_color(uint8_t fg, uint8_t bg) {
 }
 
 void screen_putchar(char c) {
+    clear_cursor();
     if (c == '\n') { cursor_col = 0; cursor_row++; }
     else if (c == '\r') { cursor_col = 0; }
     else if (c == '\t') { cursor_col = (cursor_col + 4) & ~3; }
     else {
-        VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = vga_entry(c, current_color);
+        int idx = cursor_row * cols + cursor_col;
+        tbuf[idx].c = c;
+        tbuf[idx].fg = current_fg;
+        tbuf[idx].bg = current_bg;
+        redraw_char(cursor_row, cursor_col);
         cursor_col++;
     }
-    if (cursor_col >= VGA_WIDTH) { cursor_col = 0; cursor_row++; }
+    if (cursor_col >= cols) { cursor_col = 0; cursor_row++; }
     scroll();
     update_cursor();
 
-    /* Mirror to serial */
     if (serial_mirror) {
         serial_putchar(c);
     }
@@ -103,30 +159,46 @@ void screen_print(const char *str) {
 }
 
 void screen_print_color(const char *str, uint8_t fg, uint8_t bg) {
-    uint8_t prev = current_color;
+    uint32_t prev_fg = current_fg;
+    uint32_t prev_bg = current_bg;
     screen_set_color(fg, bg);
     screen_print(str);
-    current_color = prev;
+    current_fg = prev_fg;
+    current_bg = prev_bg;
 }
 
 void screen_print_at(const char *str, int row, int col) {
+    clear_cursor();
     int old_row = cursor_row, old_col = cursor_col;
     cursor_row = row; cursor_col = col;
-    screen_print(str);
+    while (*str && cursor_col < cols) {
+        int idx = cursor_row * cols + cursor_col;
+        tbuf[idx].c = *str;
+        tbuf[idx].fg = current_fg;
+        tbuf[idx].bg = current_bg;
+        redraw_char(cursor_row, cursor_col);
+        cursor_col++; str++;
+    }
     cursor_row = old_row; cursor_col = old_col;
     update_cursor();
 }
 
 void screen_newline(void) {
+    clear_cursor();
     cursor_col = 0; cursor_row++;
     scroll(); update_cursor();
     if (serial_mirror) serial_putchar('\n');
 }
 
 void screen_backspace(void) {
+    clear_cursor();
     if (cursor_col > 0) cursor_col--;
-    else if (cursor_row > 0) { cursor_row--; cursor_col = VGA_WIDTH - 1; }
-    VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = vga_entry(' ', current_color);
+    else if (cursor_row > 0) { cursor_row--; cursor_col = cols - 1; }
+    int idx = cursor_row * cols + cursor_col;
+    tbuf[idx].c = ' ';
+    tbuf[idx].fg = current_fg;
+    tbuf[idx].bg = current_bg;
+    redraw_char(cursor_row, cursor_col);
     update_cursor();
     if (serial_mirror) serial_putchar('\b');
 }
@@ -134,28 +206,32 @@ void screen_backspace(void) {
 int screen_get_row(void) { return cursor_row; }
 int screen_get_col(void) { return cursor_col; }
 
-/* ── Positioned Drawing ─────────────────────────────────── */
-
 void screen_put_char_at(int row, int col, char c, uint8_t fg, uint8_t bg) {
-    if (row < 0 || row >= VGA_HEIGHT || col < 0 || col >= VGA_WIDTH) return;
-    uint8_t color = (bg << 4) | (fg & 0x0F);
-    VGA_MEMORY[row * VGA_WIDTH + col] = vga_entry(c, color);
-    /* Don't mirror positioned drawing to serial — it's VGA GUI-only */
+    if (row < 0 || row >= rows || col < 0 || col >= cols) return;
+    int idx = row * cols + col;
+    tbuf[idx].c = c;
+    tbuf[idx].fg = ansi_colors[fg & 0x0F];
+    tbuf[idx].bg = ansi_colors[bg & 0x0F];
+    redraw_char(row, col);
 }
 
 void screen_put_str_at(int row, int col, const char *str, uint8_t fg, uint8_t bg) {
-    uint8_t color = (bg << 4) | (fg & 0x0F);
-    while (*str && col < VGA_WIDTH) {
-        if (row >= 0 && row < VGA_HEIGHT)
-            VGA_MEMORY[row * VGA_WIDTH + col] = vga_entry(*str, color);
+    while (*str && col < cols) {
+        if (row >= 0 && row < rows) {
+            int idx = row * cols + col;
+            tbuf[idx].c = *str;
+            tbuf[idx].fg = ansi_colors[fg & 0x0F];
+            tbuf[idx].bg = ansi_colors[bg & 0x0F];
+            redraw_char(row, col);
+        }
         str++; col++;
     }
 }
 
 void screen_fill_row(int row, int col_start, int col_end, char c, uint8_t fg, uint8_t bg) {
-    uint8_t color = (bg << 4) | (fg & 0x0F);
-    for (int col = col_start; col <= col_end && col < VGA_WIDTH; col++)
-        VGA_MEMORY[row * VGA_WIDTH + col] = vga_entry(c, color);
+    for (int col = col_start; col <= col_end && col < cols; col++) {
+        screen_put_char_at(row, col, c, fg, bg);
+    }
 }
 
 void screen_fill_rect(int r1, int c1, int r2, int c2, char c, uint8_t fg, uint8_t bg) {
@@ -165,11 +241,11 @@ void screen_fill_rect(int r1, int c1, int r2, int c2, char c, uint8_t fg, uint8_
 
 void screen_draw_box(int r1, int c1, int r2, int c2, uint8_t fg, uint8_t bg, int style) {
     char h, v, tl, tr, bl, br;
-    if (style == 1) { /* single */
+    if (style == 1) { 
         h = (char)BOX_H; v = (char)BOX_V;
         tl = (char)BOX_TL; tr = (char)BOX_TR;
         bl = (char)BOX_BL; br = (char)BOX_BR;
-    } else { /* double */
+    } else { 
         h = (char)BOX_DH; v = (char)BOX_DV;
         tl = (char)BOX_DTL; tr = (char)BOX_DTR;
         bl = (char)BOX_DBL; br = (char)BOX_DBR;
@@ -191,23 +267,19 @@ void screen_draw_box(int r1, int c1, int r2, int c2, uint8_t fg, uint8_t bg, int
 }
 
 void screen_set_cursor(int row, int col) {
+    clear_cursor();
     cursor_row = row; cursor_col = col;
     update_cursor();
 }
 
 void screen_hide_cursor(void) {
-    outb(0x3D4, 0x0A);
-    outb(0x3D5, 0x20); /* bit 5 disables cursor */
+    clear_cursor();
 }
 
 void screen_show_cursor(void) {
-    outb(0x3D4, 0x0A);
-    outb(0x3D5, (inb(0x3D5) & 0xC0) | 13); /* cursor start scanline */
-    outb(0x3D4, 0x0B);
-    outb(0x3D5, (inb(0x3D5) & 0xE0) | 15); /* cursor end scanline */
+    update_cursor();
 }
 
-/* Approximate millisecond delay using busy loop */
 void screen_delay(int ms) {
     for (int i = 0; i < ms; i++) {
         for (volatile int j = 0; j < 4000; j++) {
@@ -216,7 +288,6 @@ void screen_delay(int ms) {
     }
 }
 
-/* Enable/disable serial mirroring */
 void screen_set_serial_mirror(int enable) {
     serial_mirror = enable;
 }

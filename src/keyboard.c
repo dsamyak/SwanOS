@@ -104,6 +104,22 @@ void keyboard_init(void) {
     register_interrupt_handler(33, keyboard_callback); /* IRQ1 → INT 33 */
 }
 
+void keyboard_flush(void) {
+    /* Clear the software key buffer */
+    kb_head = 0;
+    kb_tail = 0;
+
+    /* Drain any pending bytes from the PS/2 controller */
+    while (inb(0x64) & 1) {
+        inb(0x60);
+    }
+
+    /* Drain any pending serial port data */
+    while (serial_data_ready()) {
+        serial_read_char();
+    }
+}
+
 int keyboard_has_key(void) {
     return (kb_head != kb_tail) || serial_data_ready();
 }

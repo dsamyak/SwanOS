@@ -5,7 +5,7 @@
 
 ; Multiboot header constants
 MBOOT_MAGIC     equ 0x1BADB002
-MBOOT_FLAGS     equ 0x00000003    ; align + meminfo
+MBOOT_FLAGS     equ 0x00000007    ; align + meminfo + video_mode
 MBOOT_CHECKSUM  equ -(MBOOT_MAGIC + MBOOT_FLAGS)
 
 section .multiboot
@@ -13,6 +13,15 @@ align 4
     dd MBOOT_MAGIC
     dd MBOOT_FLAGS
     dd MBOOT_CHECKSUM
+    dd 0  ; header_addr
+    dd 0  ; load_addr
+    dd 0  ; load_end_addr
+    dd 0  ; bss_end_addr
+    dd 0  ; entry_addr
+    dd 0  ; mode_type (0 = linear graphics)
+    dd 1920 ; width
+    dd 1080 ; height
+    dd 32 ; depth
 
 ; ── Stack ──────────────────────────────────────────────────
 section .bss

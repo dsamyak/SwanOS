@@ -17,6 +17,11 @@
 #include "vga_gfx.h"
 #include "mouse.h"
 #include "desktop.h"
+#include "paging.h"
+#include "gdt.h"
+#include "process.h"
+#include "syscall.h"
+#include "multiboot.h"
 
 /* ── Advanced Boot Splash ────────────────────────────────── */
 /* Particle system, neural network nodes, pulsing rings,
@@ -264,206 +269,15 @@ static void draw_dot_spinner(int cx, int cy, int r, int frame) {
     }
 }
 
-/* ── Main boot splash ─────────────────────────────────────── */
 static void gfx_boot_splash(void) {
     screen_set_serial_mirror(0);
-    vga_gfx_init();
+    // VESA is initialized in kernel_main before this
     vga_clear(0);
-
-    /* Setup special splash palette entries */
-    vga_set_palette(96, 2, 8, 20);   /* deep blue glow */
-    vga_set_palette(97, 4, 14, 30);  /* medium blue glow */
-    vga_set_palette(98, 8, 20, 40);  /* bright blue glow */
-
-    int cx = GFX_W / 2;  /* 160 */
-
-    /* ══════ PHASE 1: Background + Particles fade in ══════ */
-    draw_splash_bg();
-    vga_fade_from_black(8);
-
-    /* Emit particles from center */
-    particle_count = 0;
-    for (int f = 0; f < 30; f++) {
-        if (f % 2 == 0) {
-            for (int p = 0; p < 3; p++)
-                spawn_particle(cx, 60);
-        }
-        update_particles();
-        /* Redraw bg + particles */
-        draw_splash_bg();
-        draw_particles();
-        vga_vsync();
-        screen_delay(20);
-    }
-
-    /* ══════ PHASE 2: Neural network animation ══════ */
-    for (int f = 0; f < 40; f++) {
-        draw_splash_bg();
-        draw_particles();
-        update_particles();
-        draw_neural_net(cx, 65, f);
-
-        /* Pulsing rings behind network */
-        draw_pulse_rings(cx, 65, f);
-
-        vga_vsync();
-        screen_delay(25);
-    }
-
-    /* ══════ PHASE 3: Title reveal with glow ══════ */
-    /* Clear neural net area, keep bg */
-    draw_splash_bg();
-
-    /* Draw the swan icon centered above title */
-    int icon_cy = 45;
-    /* Outer glow ring */
-    vga_draw_ring(cx, icon_cy, 30, 1, 10);
-    screen_delay(50);
-    vga_draw_ring(cx, icon_cy, 28, 2, 15);
-    screen_delay(50);
-
-    /* Swan body */
-    for (int y = -8; y <= 10; y++) {
-        for (int x = -14; x <= 14; x++) {
-            int ex = x - 2, ey = y - 2;
-            if ((ex * ex * 64 + ey * ey * 196) <= 196 * 64)
-                vga_putpixel(cx + x, icon_cy + y, 7);
-        }
-    }
-    /* Neck */
-    int neck[][2] = {{-6,0},{-8,-4},{-10,-8},{-11,-12},{-10,-16},{-8,-19},{-5,-21}};
-    for (int i = 0; i < 7; i++)
-        vga_fill_circle(cx + neck[i][0], icon_cy + neck[i][1], 3, 7);
-    /* Head + beak */
-    vga_fill_circle(cx - 3, icon_cy - 22, 4, 7);
-    for (int i = 0; i < 5; i++)
-        vga_draw_hline(cx + 1 + i, icon_cy - 23, 5 - i, 19);
-    vga_putpixel(cx - 1, icon_cy - 23, 1);
-    vga_putpixel(cx, icon_cy - 23, 1);
-    screen_delay(200);
-
-    /* Title: "SWANOS" in 3x scale for impact */
-    const char *title = "SWANOS";
-    int tw = 6 * 27; /* 3x scale: 9px * 3 per char */
-    int tx = (GFX_W - tw) / 2;
-    int ty = 82;
-    for (int i = 0; title[i]; i++) {
-        vga_draw_char_3x(tx + i * 27, ty, title[i], 7);
-        screen_delay(50);
-    }
-
-    /* Glowing accent line */
-    screen_delay(80);
-    int ly = ty + 28;
-    draw_glow_line(ly, cx - 70, cx + 70, cx);
-    draw_glow_line(ly + 1, cx - 65, cx + 65, cx);
-
-    /* ══════ PHASE 4: LLM branding ══════ */
-    screen_delay(100);
-
-    /* "ARTIFICIAL INTELLIGENCE" subtitle */
-    const char *ai1 = "ARTIFICIAL INTELLIGENCE";
-    int ai1_w = 23 * 7;
-    int ai1_x = (GFX_W - ai1_w) / 2;
-    vga_draw_string(ai1_x, ly + 6, ai1, 15);
-
-    screen_delay(60);
-    const char *ai2 = "OPERATING SYSTEM";
-    int ai2_w = 16 * 7;
-    int ai2_x = (GFX_W - ai2_w) / 2;
-    vga_draw_string(ai2_x, ly + 17, ai2, 5);
-
-    /* Version + model badge */
-    screen_delay(40);
-    const char *badge = "v3.0  |  LLM-Powered  |  x86";
-    int badge_w = 29 * 7;
-    int badge_x = (GFX_W - badge_w) / 2;
-    vga_draw_string(badge_x, ly + 30, badge, 3);
-
-    /* ══════ PHASE 5: Boot progress with spinner ══════ */
-    screen_delay(150);
-    int bar_x = (GFX_W - 180) / 2;
-    int bar_y = 168;
-    int bar_w = 180;
-    int bar_h = 3;
-
-    const char *loading_msgs[] = {
-        "Loading neural engine...",
-        "Initializing AI core...",
-        "Preparing workspace...",
-        "Starting SwanOS...",
-    };
-
-    int spinner_cx = cx;
-    int spinner_cy = bar_y + 16;
-    int total_steps = 48;
-
-    for (int step = 0; step <= total_steps; step++) {
-        /* Update loading message */
-        int msg_idx = (step * 4) / (total_steps + 1);
-        if (msg_idx > 3) msg_idx = 3;
-
-        /* Clear status text area */
-        vga_fill_rect(0, bar_y - 14, GFX_W, 10, 80);
-        int msg_w = strlen(loading_msgs[msg_idx]) * 7;
-        int msg_x = (GFX_W - msg_w) / 2;
-        vga_draw_string(msg_x, bar_y - 12, loading_msgs[msg_idx], 4);
-
-        draw_glow_bar(bar_x, bar_y, bar_w, bar_h, step, total_steps);
-
-        /* Spinner */
-        vga_fill_rect(spinner_cx - 12, spinner_cy - 12, 24, 24, 80);
-        draw_dot_spinner(spinner_cx, spinner_cy, 8, step);
-
-        /* Generate some particles near the bar for effect */
-        if (step % 6 == 0) {
-            int px = bar_x + (step * bar_w) / total_steps;
-            spawn_particle(px, bar_y);
-        }
-        update_particles();
-        draw_particles();
-
-        vga_vsync();
-        screen_delay(35);
-    }
-
-    /* ══════ PHASE 6: Completion ══════ */
-    vga_fill_rect(0, bar_y - 14, GFX_W, 10, 80);
-    const char *ready = "AI SYSTEMS ONLINE";
-    int rw = 17 * 7;
-    int rx = (GFX_W - rw) / 2;
-    vga_draw_string(rx, bar_y - 12, ready, 35);
-
-    /* Replace spinner with checkmark */
-    vga_fill_rect(spinner_cx - 12, spinner_cy - 12, 24, 24, 80);
-    vga_fill_circle(spinner_cx, spinner_cy, 7, 35);
-    /* Checkmark */
-    vga_putpixel(spinner_cx - 3, spinner_cy, 7);
-    vga_putpixel(spinner_cx - 2, spinner_cy + 1, 7);
-    vga_putpixel(spinner_cx - 1, spinner_cy + 2, 7);
-    vga_putpixel(spinner_cx, spinner_cy + 1, 7);
-    vga_putpixel(spinner_cx + 1, spinner_cy, 7);
-    vga_putpixel(spinner_cx + 2, spinner_cy - 1, 7);
-    vga_putpixel(spinner_cx + 3, spinner_cy - 2, 7);
-
-    /* Final particle burst */
-    for (int p = 0; p < 15; p++)
-        spawn_particle(spinner_cx, spinner_cy);
-    for (int f = 0; f < 20; f++) {
-        update_particles();
-        draw_particles();
-        vga_vsync();
-        screen_delay(20);
-    }
-
-    screen_delay(800);
-
-    /* Smooth fade out */
-    vga_fade_to_black(10);
-
-    /* Switch back to text mode */
-    vga_gfx_exit();
-    screen_init();
+    int cx = GFX_W / 2;
+    int cy = GFX_H / 2;
+    const char *msg = "SwanOS v3.0 - Booting AI Microkernel...";
+    vga_draw_string_3x(cx - (strlen(msg)*26/2), cy, msg, 0xFFFFFFFF);
+    screen_delay(500);
     screen_set_serial_mirror(1);
 }
 
@@ -607,9 +421,9 @@ static int select_mode(void) {
     }
 }
 
-void kernel_main(uint32_t magic, uint32_t mboot_info) {
+void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
     (void)magic;
-    (void)mboot_info;
+    multiboot_info_t *mboot = (multiboot_info_t *)mboot_info_addr;
 
     /* ── Graphical boot splash (returns in text mode) ── */
     gfx_boot_splash();
@@ -641,8 +455,17 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
     /* ── Boot subsystems with progress ── */
     boot_status("VGA display initialized");
 
+    gdt_init();
+    boot_status("Global Descriptor Table & TSS loaded");
+
     idt_init();
     boot_status("Interrupt Descriptor Table loaded");
+
+    process_init();
+    boot_status("Process scheduler initialized");
+
+    syscall_init();
+    boot_status("System calls (int 0x80) enabled");
 
     timer_init(100);
     boot_status("PIT timer @ 100 Hz");
@@ -655,6 +478,9 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
 
     memory_init();
     boot_status("Memory allocator ready (4 MB heap)");
+
+    paging_init();
+    boot_status("Virtual memory paging enabled");
 
     mouse_init();
     boot_status("PS/2 mouse driver loaded");
@@ -694,6 +520,7 @@ void kernel_main(uint32_t magic, uint32_t mboot_info) {
             screen_set_color(VGA_WHITE, VGA_BLACK);
         }
 
+        keyboard_flush();            /* clear stale serial/keyboard data */
         if (!user_login()) continue;
         screen_print("\n");
 

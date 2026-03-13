@@ -1,0 +1,22 @@
+src/paging.c: In function ‘page_fault_handler’:
+src/paging.c:43:38: warning: unused parameter ‘regs’ [-Wunused-parameter]
+   43 | void page_fault_handler(registers_t *regs) {
+      |                         ~~~~~~~~~~~~~^~~~
+ld: warning: src/paging_asm.o: missing .note.GNU-stack section implies executable stack
+ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:swanos.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  101g free
+Added to ISO image: directory '/'='/tmp/grub.Wyw84E'
+xorriso : UPDATE :     295 files added in 1 seconds
+Added to ISO image: directory '/'='/mnt/c/Users/VICTUS/Desktop/Swanos/iso'
+xorriso : UPDATE :     299 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/usr/lib/grub/i386-pc/boot_hybrid.img'
+xorriso : UPDATE :  55.30% done
+ISO image produced: 2546 sectors
+Written to medium : 2546 sectors at LBA 0
+Writing to 'stdio:swanos.iso' completed successfully.
+

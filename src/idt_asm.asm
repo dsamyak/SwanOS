@@ -9,6 +9,7 @@ section .text
 ; ── External C handlers ────────────────────────────────────
 extern isr_handler
 extern irq_handler
+extern switch_context
 
 ; ── Common ISR stub ────────────────────────────────────────
 isr_common_stub:
@@ -25,6 +26,11 @@ isr_common_stub:
     push esp            ; pass pointer to registers_t
     call isr_handler
     add esp, 4          ; clean up argument
+
+    push esp            ; pass current ESP to context switcher
+    call switch_context
+    add esp, 4
+    mov esp, eax        ; update ESP to new task's stack
 
     pop eax             ; restore data segment
     mov ds, ax
@@ -51,6 +57,11 @@ irq_common_stub:
     push esp            ; pass pointer to registers_t
     call irq_handler
     add esp, 4          ; clean up argument
+
+    push esp            ; pass current ESP to context switcher
+    call switch_context
+    add esp, 4
+    mov esp, eax        ; update ESP to new task's stack
 
     pop eax
     mov ds, ax
@@ -114,6 +125,9 @@ ISR_NOERRCODE 28
 ISR_NOERRCODE 29
 ISR_NOERRCODE 30
 ISR_NOERRCODE 31
+
+; ── Syscall stub (int 0x80) ──────────────────────────────
+ISR_NOERRCODE 128
 
 ; ── IRQ stubs (IRQ 0-15 → INT 32-47) ─────────────────────
 %macro IRQ 2

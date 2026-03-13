@@ -10,8 +10,8 @@
 #include "vga_gfx.h"
 
 /* ── Mouse state ──────────────────────────────────────────── */
-static volatile int      mouse_x = GFX_W / 2;
-static volatile int      mouse_y = GFX_H / 2;
+static volatile int      mouse_x = 0;
+static volatile int      mouse_y = 0;
 static volatile uint8_t  mouse_buttons = 0;
 static volatile int      mouse_moved_flag = 0;
 static volatile int      mouse_clicked_flag = 0;
@@ -118,6 +118,9 @@ static void mouse_callback(registers_t *regs) {
 
 void mouse_init(void) {
     uint8_t status_byte;
+
+    mouse_x = GFX_W / 2;
+    mouse_y = GFX_H / 2;
 
     /* Enable the auxiliary mouse device */
     mouse_wait_input();

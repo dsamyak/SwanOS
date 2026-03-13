@@ -11,6 +11,7 @@ char  *strcpy(char *dst, const char *src);
 char  *strncpy(char *dst, const char *src, int n);
 char  *strcat(char *dst, const char *src);
 char  *strchr(const char *s, int c);
+char  *strstr(const char *haystack, const char *needle);
 void  *memset(void *ptr, int val, size_t n);
 void  *memcpy(void *dst, const void *src, size_t n);
 void   itoa(int num, char *buf, int base);

@@ -1,283 +1,94 @@
 /* ============================================================
- * SwanOS — VGA Mode 13h Graphics Driver
- * 320x200, 256 colors, direct VGA register programming.
- * Modern dark-theme palette, scaled font, shape primitives.
+ * SwanOS — VESA High-Res Graphics Driver
+ * Modern 32-bit ARGB Framebuffer Rendering.
  * ============================================================ */
 
 #include "vga_gfx.h"
-#include "ports.h"
-#include "screen.h"
+#include "multiboot.h"
+#include "string.h"
 
-static uint8_t *const VGA_FB = (uint8_t *)0xA0000;
-static uint8_t saved_palette[256 * 3];
+int GFX_W = 1920;
+int GFX_H = 1080;
+int GFX_BPP = 32;
+int GFX_PITCH = 1920 * 4;
 
-/* Double-buffer for flicker-free rendering */
-static uint8_t backbuf[320 * 200];
+static uint32_t *VESA_FB = (uint32_t *)0xFD000000;
 
-/* Font data from VGA plane 2 (256 chars * 32 bytes each) */
-#define VGA_FONT_SIZE 8192
-static uint8_t saved_font[VGA_FONT_SIZE];
+/* Backbuffer for double buffering high-res UI */
+/* Since a 1080p backbuffer is ~8MB, we declare it in BSS */
+static uint32_t backbuf[1920 * 1080];
 
-/* ── VGA register ports ───────────────────────────────────── */
-#define VGA_MISC_WRITE     0x3C2
-#define VGA_SEQ_INDEX      0x3C4
-#define VGA_SEQ_DATA       0x3C5
-#define VGA_CRTC_INDEX     0x3D4
-#define VGA_CRTC_DATA      0x3D5
-#define VGA_GC_INDEX       0x3CE
-#define VGA_GC_DATA        0x3CF
-#define VGA_AC_INDEX       0x3C0
-#define VGA_AC_WRITE       0x3C0
-#define VGA_IS1_READ       0x3DA
-#define VGA_DAC_WRITE_IDX  0x3C8
-#define VGA_DAC_DATA       0x3C9
-#define VGA_DAC_READ_IDX   0x3C7
-
-/* ── Mode 13h registers ───────────────────────────────────── */
-static const uint8_t m13_misc = 0x63;
-static const uint8_t m13_seq[]  = {0x03,0x01,0x0F,0x00,0x0E};
-static const uint8_t m13_crtc[] = {
-    0x5F,0x4F,0x50,0x82,0x54,0x80,0xBF,0x1F,
-    0x00,0x41,0x00,0x00,0x00,0x00,0x00,0x00,
-    0x9C,0x0E,0x8F,0x28,0x40,0x96,0xB9,0xA3,0xFF};
-static const uint8_t m13_gc[]   = {0x00,0x00,0x00,0x00,0x00,0x40,0x05,0x0F,0xFF};
-static const uint8_t m13_ac[]   = {
-    0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
-    0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F,
-    0x41,0x00,0x0F,0x00,0x00};
-
-/* ── Mode 03h (text) registers ────────────────────────────── */
-static const uint8_t m03_misc = 0x67;
-static const uint8_t m03_seq[]  = {0x03,0x00,0x03,0x00,0x02};
-static const uint8_t m03_crtc[] = {
-    0x5F,0x4F,0x50,0x82,0x55,0x81,0xBF,0x1F,
-    0x00,0x4F,0x0D,0x0E,0x00,0x00,0x00,0x50,
-    0x9C,0x0E,0x8F,0x28,0x1F,0x96,0xB9,0xA3,0xFF};
-static const uint8_t m03_gc[]   = {0x00,0x00,0x00,0x00,0x00,0x10,0x0E,0x00,0xFF};
-static const uint8_t m03_ac[]   = {
-    0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,
-    0x38,0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F,
-    0x0C,0x00,0x0F,0x08,0x00};
-
-static void write_regs(uint8_t misc, const uint8_t *seq, int sn,
-                       const uint8_t *crtc, int cn,
-                       const uint8_t *gc, int gn,
-                       const uint8_t *ac, int an)
-{
-    outb(VGA_MISC_WRITE, misc);
-    for (int i = 0; i < sn; i++) { outb(VGA_SEQ_INDEX, i); outb(VGA_SEQ_DATA, seq[i]); }
-    outb(VGA_CRTC_INDEX, 0x03); outb(VGA_CRTC_DATA, inb(VGA_CRTC_DATA) | 0x80);
-    outb(VGA_CRTC_INDEX, 0x11); outb(VGA_CRTC_DATA, inb(VGA_CRTC_DATA) & ~0x80);
-    for (int i = 0; i < cn; i++) { outb(VGA_CRTC_INDEX, i); outb(VGA_CRTC_DATA, crtc[i]); }
-    for (int i = 0; i < gn; i++) { outb(VGA_GC_INDEX, i); outb(VGA_GC_DATA, gc[i]); }
-    for (int i = 0; i < an; i++) { inb(VGA_IS1_READ); outb(VGA_AC_INDEX, i); outb(VGA_AC_WRITE, ac[i]); }
-    inb(VGA_IS1_READ); outb(VGA_AC_INDEX, 0x20);
-}
-
-/* ── Font save/restore (VGA plane 2) ──────────────────────── */
-
-static void save_font(void) {
-    /* Configure VGA to read from plane 2 (font data) */
-    outb(VGA_SEQ_INDEX, 0x02); outb(VGA_SEQ_DATA, 0x04); /* Map Mask: plane 2 */
-    outb(VGA_SEQ_INDEX, 0x04); outb(VGA_SEQ_DATA, 0x06); /* Seq Memory Mode: sequential */
-    outb(VGA_GC_INDEX, 0x04); outb(VGA_GC_DATA, 0x02);   /* Read Map Select: plane 2 */
-    outb(VGA_GC_INDEX, 0x05); outb(VGA_GC_DATA, 0x00);   /* GC Mode: read mode 0 */
-    outb(VGA_GC_INDEX, 0x06); outb(VGA_GC_DATA, 0x0C);   /* Misc: A0000, 64K window */
-
-    volatile uint8_t *vga = (volatile uint8_t *)0xA0000;
-    for (int i = 0; i < VGA_FONT_SIZE; i++)
-        saved_font[i] = vga[i];
-
-    /* Restore text-mode plane access */
-    outb(VGA_SEQ_INDEX, 0x02); outb(VGA_SEQ_DATA, 0x03); /* Map Mask: planes 0,1 */
-    outb(VGA_SEQ_INDEX, 0x04); outb(VGA_SEQ_DATA, 0x02); /* Seq Memory Mode: odd/even */
-    outb(VGA_GC_INDEX, 0x04); outb(VGA_GC_DATA, 0x00);   /* Read Map Select: plane 0 */
-    outb(VGA_GC_INDEX, 0x05); outb(VGA_GC_DATA, 0x10);   /* GC Mode: odd/even */
-    outb(VGA_GC_INDEX, 0x06); outb(VGA_GC_DATA, 0x0E);   /* Misc: B8000, odd/even */
-}
-
-static void restore_font(void) {
-    /* Configure VGA to write to plane 2 (font data) */
-    outb(VGA_SEQ_INDEX, 0x02); outb(VGA_SEQ_DATA, 0x04); /* Map Mask: plane 2 */
-    outb(VGA_SEQ_INDEX, 0x04); outb(VGA_SEQ_DATA, 0x06); /* Seq Memory Mode: sequential */
-    outb(VGA_GC_INDEX, 0x04); outb(VGA_GC_DATA, 0x02);   /* Read Map Select: plane 2 */
-    outb(VGA_GC_INDEX, 0x05); outb(VGA_GC_DATA, 0x00);   /* GC Mode: write mode 0 */
-    outb(VGA_GC_INDEX, 0x06); outb(VGA_GC_DATA, 0x0C);   /* Misc: A0000, 64K window */
-
-    volatile uint8_t *vga = (volatile uint8_t *)0xA0000;
-    for (int i = 0; i < VGA_FONT_SIZE; i++)
-        vga[i] = saved_font[i];
-
-    /* Restore text-mode plane access settings */
-    outb(VGA_SEQ_INDEX, 0x02); outb(VGA_SEQ_DATA, 0x03); /* Map Mask: planes 0,1 */
-    outb(VGA_SEQ_INDEX, 0x04); outb(VGA_SEQ_DATA, 0x02); /* Seq Memory Mode: odd/even */
-    outb(VGA_GC_INDEX, 0x04); outb(VGA_GC_DATA, 0x00);   /* Read Map Select: plane 0 */
-    outb(VGA_GC_INDEX, 0x05); outb(VGA_GC_DATA, 0x10);   /* GC Mode: odd/even */
-    outb(VGA_GC_INDEX, 0x06); outb(VGA_GC_DATA, 0x0E);   /* Misc: B8000, odd/even */
-}
-
-/* ── Modern Dark Palette ──────────────────────────────────── */
-static void setup_modern_palette(void) {
-    /* 0: true black */
-    vga_set_palette(0, 0, 0, 0);
-    /* 1: near-black (background base) */
-    vga_set_palette(1, 2, 2, 5);
-    /* 2: dark bg */
-    vga_set_palette(2, 3, 3, 7);
-    /* 3: dark grey */
-    vga_set_palette(3, 8, 8, 12);
-    /* 4: medium grey */
-    vga_set_palette(4, 16, 16, 20);
-    /* 5: light grey */
-    vga_set_palette(5, 28, 28, 32);
-    /* 6: near-white */
-    vga_set_palette(6, 50, 50, 55);
-    /* 7: pure white */
-    vga_set_palette(7, 63, 63, 63);
-
-    /* 10-19: cyan/teal accent gradient (primary brand color) */
-    for (int i = 0; i < 10; i++) {
-        int r = (i * 8) / 9;
-        int g = 20 + (i * 43) / 9;
-        int b = 30 + (i * 33) / 9;
-        vga_set_palette(10 + i, r, g, b);
+void vesa_gfx_init(multiboot_info_t *mboot) {
+    if (mboot->flags & MULTIBOOT_INFO_FRAMEBUFFER_INFO) {
+        VESA_FB = (uint32_t *)(uint32_t)mboot->framebuffer_addr;
+        GFX_W = mboot->framebuffer_width;
+        GFX_H = mboot->framebuffer_height;
+        GFX_PITCH = mboot->framebuffer_pitch;
+        GFX_BPP = mboot->framebuffer_bpp;
     }
-
-    /* 20-29: blue accent gradient */
-    for (int i = 0; i < 10; i++) {
-        int r = (i * 5) / 9;
-        int g = (i * 15) / 9;
-        int b = 20 + (i * 43) / 9;
-        vga_set_palette(20 + i, r, g, b);
-    }
-
-    /* 30-39: green accent gradient */
-    for (int i = 0; i < 10; i++) {
-        int r = (i * 5) / 9;
-        int g = 15 + (i * 48) / 9;
-        int b = (i * 8) / 9;
-        vga_set_palette(30 + i, r, g, b);
-    }
-
-    /* 40-49: warm/gold accent gradient */
-    for (int i = 0; i < 10; i++) {
-        int r = 25 + (i * 38) / 9;
-        int g = 18 + (i * 32) / 9;
-        int b = (i * 5) / 9;
-        vga_set_palette(40 + i, r, g, b);
-    }
-
-    /* 50-59: purple accent gradient */
-    for (int i = 0; i < 10; i++) {
-        int r = 10 + (i * 30) / 9;
-        int g = (i * 8) / 9;
-        int b = 20 + (i * 43) / 9;
-        vga_set_palette(50 + i, r, g, b);
-    }
-
-    /* 60-69: Loading ring segment colors (various brightnesses) */
-    for (int i = 0; i < 10; i++) {
-        int v = 5 + (i * 58) / 9;
-        vga_set_palette(60 + i, (v * 3) / 10, (v * 8) / 10, v);
-    }
-
-    /* 70: dim ring segment */
-    vga_set_palette(70, 4, 4, 8);
-    /* 71: bright ring segment */
-    vga_set_palette(71, 10, 55, 63);
-
-    /* 80-89: subtle background gradient */
-    for (int i = 0; i < 10; i++) {
-        vga_set_palette(80 + i, 1 + i/3, 1 + i/3, 3 + i);
-    }
-}
-
-/* ── Public API ────────────────────────────────────────────── */
-
-void vga_gfx_init(void) {
-    /* Save the BIOS text-mode font before we destroy it */
-    save_font();
-
-    write_regs(m13_misc, m13_seq, 5, m13_crtc, 25, m13_gc, 9, m13_ac, 21);
-    setup_modern_palette();
-
-    /* Save palette for fades */
-    outb(VGA_DAC_READ_IDX, 0);
-    for (int i = 0; i < 256 * 3; i++)
-        saved_palette[i] = inb(VGA_DAC_DATA);
-
     vga_clear(0);
 }
 
-/* Restore standard VGA text-mode DAC palette.
- * Text mode AC maps: colors 0-5 → DAC 0-5, color 6 → DAC 0x14,
- * color 7 → DAC 7, colors 8-15 → DAC 0x38-0x3F.
- * We must write to the ACTUAL DAC indices the AC references. */
-static void restore_text_palette(void) {
-    static const struct { uint8_t idx, r, g, b; } dac_map[16] = {
-        { 0x00,  0,  0,  0},  /*  0: black         */
-        { 0x01,  0,  0, 42},  /*  1: blue          */
-        { 0x02,  0, 42,  0},  /*  2: green         */
-        { 0x03,  0, 42, 42},  /*  3: cyan          */
-        { 0x04, 42,  0,  0},  /*  4: red           */
-        { 0x05, 42,  0, 42},  /*  5: magenta       */
-        { 0x14, 42, 21,  0},  /*  6: brown  (AC→0x14) */
-        { 0x07, 42, 42, 42},  /*  7: light grey    */
-        { 0x38, 21, 21, 21},  /*  8: dark grey     */
-        { 0x39, 21, 21, 63},  /*  9: light blue    */
-        { 0x3A, 21, 63, 21},  /* 10: light green   */
-        { 0x3B, 21, 63, 63},  /* 11: light cyan    */
-        { 0x3C, 63, 21, 21},  /* 12: light red     */
-        { 0x3D, 63, 21, 63},  /* 13: light magenta */
-        { 0x3E, 63, 63, 21},  /* 14: yellow        */
-        { 0x3F, 63, 63, 63},  /* 15: white         */
-    };
-    for (int i = 0; i < 16; i++) {
-        outb(VGA_DAC_WRITE_IDX, dac_map[i].idx);
-        outb(VGA_DAC_DATA, dac_map[i].r);
-        outb(VGA_DAC_DATA, dac_map[i].g);
-        outb(VGA_DAC_DATA, dac_map[i].b);
+void vga_gfx_exit(void) {
+    /* No cleanup needed for linear framebuffer */
+}
+
+/* ── Basic Primitives ─────────────────────────────────────── */
+
+void vga_putpixel(int x, int y, uint32_t color) {
+    if (x >= 0 && x < GFX_W && y >= 0 && y < GFX_H) {
+        VESA_FB[(y * GFX_PITCH / 4) + x] = color;
     }
 }
 
-void vga_gfx_exit(void) {
-    write_regs(m03_misc, m03_seq, 5, m03_crtc, 25, m03_gc, 9, m03_ac, 21);
-
-    /* Restore the BIOS font to VGA plane 2 */
-    restore_font();
-
-    /* Restore standard text-mode DAC palette (fixes black screen) */
-    restore_text_palette();
-
-    /* Clear the text buffer */
-    uint16_t *tb = (uint16_t *)0xB8000;
-    for (int i = 0; i < 80 * 25; i++) tb[i] = 0x0F20;
+void vga_putpixel_alpha(int x, int y, uint32_t color) {
+    if (x < 0 || x >= GFX_W || y < 0 || y >= GFX_H) return;
+    uint32_t a = (color >> 24) & 0xFF;
+    if (a == 255) {
+        VESA_FB[(y * GFX_PITCH / 4) + x] = color;
+        return;
+    }
+    if (a == 0) return;
+    
+    uint32_t bg = VESA_FB[(y * GFX_PITCH / 4) + x];
+    uint32_t br = (bg >> 16) & 0xFF;
+    uint32_t bg_g = (bg >> 8) & 0xFF;
+    uint32_t bb = bg & 0xFF;
+    
+    uint32_t fr = (color >> 16) & 0xFF;
+    uint32_t fg_g = (color >> 8) & 0xFF;
+    uint32_t fb = color & 0xFF;
+    
+    uint32_t out_r = (fr * a + br * (255 - a)) / 255;
+    uint32_t out_g = (fg_g * a + bg_g * (255 - a)) / 255;
+    uint32_t out_b = (fb * a + bb * (255 - a)) / 255;
+    
+    VESA_FB[(y * GFX_PITCH / 4) + x] = ARGB(255, out_r, out_g, out_b);
 }
 
-void vga_putpixel(int x, int y, uint8_t color) {
-    if (x >= 0 && x < GFX_W && y >= 0 && y < GFX_H)
-        VGA_FB[y * GFX_W + x] = color;
+void vga_clear(uint32_t color) {
+    for (int y = 0; y < GFX_H; y++) {
+        for (int x = 0; x < GFX_W; x++) {
+            VESA_FB[(y * GFX_PITCH / 4) + x] = color;
+        }
+    }
 }
 
-void vga_clear(uint8_t color) {
-    for (int i = 0; i < GFX_W * GFX_H; i++) VGA_FB[i] = color;
-}
-
-void vga_fill_rect(int x, int y, int w, int h, uint8_t color) {
+void vga_fill_rect(int x, int y, int w, int h, uint32_t color) {
     for (int j = y; j < y + h; j++)
         for (int i = x; i < x + w; i++)
             vga_putpixel(i, j, color);
 }
 
-void vga_draw_hline(int x, int y, int len, uint8_t color) {
+void vga_draw_hline(int x, int y, int len, uint32_t color) {
     for (int i = 0; i < len; i++) vga_putpixel(x + i, y, color);
 }
 
-void vga_draw_vline(int x, int y, int len, uint8_t color) {
+void vga_draw_vline(int x, int y, int len, uint32_t color) {
     for (int i = 0; i < len; i++) vga_putpixel(x, y + i, color);
 }
 
-void vga_draw_circle(int cx, int cy, int r, uint8_t color) {
+void vga_draw_circle(int cx, int cy, int r, uint32_t color) {
     int x = 0, y = r, d = 3 - 2 * r;
     while (x <= y) {
         vga_putpixel(cx+x,cy+y,color); vga_putpixel(cx-x,cy+y,color);
@@ -289,49 +100,91 @@ void vga_draw_circle(int cx, int cy, int r, uint8_t color) {
     }
 }
 
-void vga_fill_circle(int cx, int cy, int r, uint8_t color) {
+void vga_fill_circle(int cx, int cy, int r, uint32_t color) {
     for (int y = -r; y <= r; y++)
         for (int x = -r; x <= r; x++)
             if (x*x + y*y <= r*r) vga_putpixel(cx+x, cy+y, color);
 }
 
-void vga_set_palette(uint8_t idx, uint8_t r, uint8_t g, uint8_t b) {
-    outb(VGA_DAC_WRITE_IDX, idx);
-    outb(VGA_DAC_DATA, r & 63);
-    outb(VGA_DAC_DATA, g & 63);
-    outb(VGA_DAC_DATA, b & 63);
-}
-
-void vga_set_palette_range(uint8_t start, int count, const uint8_t *rgb) {
-    outb(VGA_DAC_WRITE_IDX, start);
-    for (int i = 0; i < count * 3; i++) outb(VGA_DAC_DATA, rgb[i] & 63);
-}
-
-void vga_vsync(void) {
-    while (inb(VGA_IS1_READ) & 8);
-    while (!(inb(VGA_IS1_READ) & 8));
-}
-
-void vga_fade_from_black(int speed_ms) {
-    for (int step = 0; step <= 32; step++) {
-        outb(VGA_DAC_WRITE_IDX, 0);
-        for (int i = 0; i < 256 * 3; i++)
-            outb(VGA_DAC_DATA, (saved_palette[i] * step) / 32);
-        vga_vsync();
-        screen_delay(speed_ms);
+void vga_draw_ring(int cx, int cy, int r, int thickness, uint32_t color) {
+    for (int y = -(r+thickness); y <= (r+thickness); y++) {
+        for (int x = -(r+thickness); x <= (r+thickness); x++) {
+            int dist_sq = x*x + y*y;
+            int outer_sq = (r+thickness) * (r+thickness);
+            int inner_sq = (r > thickness) ? (r-thickness) * (r-thickness) : 0;
+            if (dist_sq <= outer_sq && dist_sq >= inner_sq)
+                vga_putpixel(cx + x, cy + y, color);
+        }
     }
 }
 
-void vga_fade_to_black(int speed_ms) {
-    static uint8_t cur[256 * 3];
-    outb(VGA_DAC_READ_IDX, 0);
-    for (int i = 0; i < 256 * 3; i++) cur[i] = inb(VGA_DAC_DATA);
-    for (int step = 32; step >= 0; step--) {
-        outb(VGA_DAC_WRITE_IDX, 0);
-        for (int i = 0; i < 256 * 3; i++)
-            outb(VGA_DAC_DATA, (cur[i] * step) / 32);
-        vga_vsync();
-        screen_delay(speed_ms);
+/* ── Fast Double Buffering ────────────────────────────────── */
+
+void vga_flip(void) {
+    for (int y = 0; y < GFX_H; y++) {
+        for (int x = 0; x < GFX_W; x++) {
+            VESA_FB[(y * GFX_PITCH / 4) + x] = backbuf[y * GFX_W + x];
+        }
+    }
+}
+
+uint32_t *vga_backbuffer(void) {
+    return backbuf;
+}
+
+void vga_bb_putpixel(int x, int y, uint32_t color) {
+    if (x >= 0 && x < GFX_W && y >= 0 && y < GFX_H)
+        backbuf[y * GFX_W + x] = color;
+}
+
+void vga_bb_fill_rect(int x, int y, int w, int h, uint32_t color) {
+    for (int j = y; j < y + h; j++)
+        for (int i = x; i < x + w; i++)
+            vga_bb_putpixel(i, j, color);
+}
+
+void vga_bb_draw_hline(int x, int y, int len, uint32_t color) {
+    for (int i = 0; i < len; i++) vga_bb_putpixel(x + i, y, color);
+}
+
+void vga_bb_draw_vline(int x, int y, int len, uint32_t color) {
+    for (int i = 0; i < len; i++) vga_bb_putpixel(x, y + i, color);
+}
+
+void vga_bb_draw_rect_outline(int x, int y, int w, int h, uint32_t color) {
+    vga_bb_draw_hline(x, y, w, color);
+    vga_bb_draw_hline(x, y + h - 1, w, color);
+    vga_bb_draw_vline(x, y, h, color);
+    vga_bb_draw_vline(x + w - 1, y, h, color);
+}
+
+/* Alpha blended front-to-back rect drawing */
+void vga_bb_fill_rect_alpha(int x, int y, int w, int h, uint32_t color) {
+    uint32_t a = (color >> 24) & 0xFF;
+    if (a == 255) {
+        vga_bb_fill_rect(x, y, w, h, color);
+        return;
+    }
+    if (a == 0) return;
+    
+    uint32_t fr = (color >> 16) & 0xFF;
+    uint32_t fg_g = (color >> 8) & 0xFF;
+    uint32_t fb = color & 0xFF;
+
+    for (int j = y; j < y + h; j++) {
+        for (int i = x; i < x + w; i++) {
+            if (i < 0 || i >= GFX_W || j < 0 || j >= GFX_H) continue;
+            uint32_t bg = backbuf[j * GFX_W + i];
+            uint32_t br = (bg >> 16) & 0xFF;
+            uint32_t bg_g = (bg >> 8) & 0xFF;
+            uint32_t bb = bg & 0xFF;
+            
+            uint32_t out_r = (fr * a + br * (255 - a)) / 255;
+            uint32_t out_g = (fg_g * a + bg_g * (255 - a)) / 255;
+            uint32_t out_b = (fb * a + bb * (255 - a)) / 255;
+            
+            backbuf[j * GFX_W + i] = ARGB(255, out_r, out_g, out_b);
+        }
     }
 }
 
@@ -436,15 +289,10 @@ static const uint8_t font8x8_full[95][8] = {
 
 static int full_char_idx(char c) {
     if (c >= 32 && c <= 126) return c - 32;
-    return 0; /* space for unknown */
+    return 0;
 }
 
-/* Legacy char_to_idx kept for boot splash compatibility */
-static int char_to_idx(char c) {
-    return full_char_idx(c);
-}
-
-void vga_draw_char(int x, int y, char c, uint8_t color) {
+void vga_draw_char(int x, int y, char c, uint32_t color) {
     int idx = full_char_idx(c);
     const uint8_t *g = font8x8_full[idx];
     for (int r = 0; r < 8; r++) {
@@ -455,12 +303,11 @@ void vga_draw_char(int x, int y, char c, uint8_t color) {
     }
 }
 
-void vga_draw_string(int x, int y, const char *str, uint8_t color) {
+void vga_draw_string(int x, int y, const char *str, uint32_t color) {
     while (*str) { vga_draw_char(x, y, *str, color); x += 9; str++; }
 }
 
-/* Draw a character at 2x scale for large headings */
-void vga_draw_char_2x(int x, int y, char c, uint8_t color) {
+void vga_draw_char_2x(int x, int y, char c, uint32_t color) {
     int idx = full_char_idx(c);
     const uint8_t *g = font8x8_full[idx];
     for (int r = 0; r < 8; r++) {
@@ -476,8 +323,11 @@ void vga_draw_char_2x(int x, int y, char c, uint8_t color) {
     }
 }
 
-/* Draw string at 3x scale for hero text */
-void vga_draw_char_3x(int x, int y, char c, uint8_t color) {
+void vga_draw_string_2x(int x, int y, const char *str, uint32_t color) {
+    while (*str) { vga_draw_char_2x(x, y, *str, color); x += 18; str++; }
+}
+
+void vga_draw_char_3x(int x, int y, char c, uint32_t color) {
     int idx = full_char_idx(c);
     const uint8_t *g = font8x8_full[idx];
     for (int r = 0; r < 8; r++) {
@@ -492,63 +342,12 @@ void vga_draw_char_3x(int x, int y, char c, uint8_t color) {
     }
 }
 
-void vga_draw_string_2x(int x, int y, const char *str, uint8_t color) {
-    while (*str) { vga_draw_char_2x(x, y, *str, color); x += 18; str++; }
-}
-
-void vga_draw_string_3x(int x, int y, const char *str, uint8_t color) {
+void vga_draw_string_3x(int x, int y, const char *str, uint32_t color) {
     while (*str) { vga_draw_char_3x(x, y, *str, color); x += 26; str++; }
 }
 
-/* ── Thick circle for ring shapes ─────────────────────────── */
-void vga_draw_ring(int cx, int cy, int r, int thickness, uint8_t color) {
-    for (int y = -(r+thickness); y <= (r+thickness); y++) {
-        for (int x = -(r+thickness); x <= (r+thickness); x++) {
-            int dist_sq = x*x + y*y;
-            int outer_sq = (r+thickness) * (r+thickness);
-            int inner_sq = (r > thickness) ? (r-thickness) * (r-thickness) : 0;
-            if (dist_sq <= outer_sq && dist_sq >= inner_sq)
-                vga_putpixel(cx + x, cy + y, color);
-        }
-    }
-}
-
-/* ══════════════════════════════════════════════════════════════
- *  DOUBLE-BUFFER + BACK-BUFFER DRAWING
- * ══════════════════════════════════════════════════════════════ */
-
-void vga_flip(void) {
-    /* Fast copy: back-buffer → VGA framebuffer */
-    uint8_t *src = backbuf;
-    uint8_t *dst = VGA_FB;
-    for (int i = 0; i < GFX_W * GFX_H; i++)
-        dst[i] = src[i];
-}
-
-uint8_t *vga_backbuffer(void) {
-    return backbuf;
-}
-
-void vga_bb_putpixel(int x, int y, uint8_t color) {
-    if (x >= 0 && x < GFX_W && y >= 0 && y < GFX_H)
-        backbuf[y * GFX_W + x] = color;
-}
-
-void vga_bb_fill_rect(int x, int y, int w, int h, uint8_t color) {
-    for (int j = y; j < y + h; j++)
-        for (int i = x; i < x + w; i++)
-            vga_bb_putpixel(i, j, color);
-}
-
-void vga_bb_draw_hline(int x, int y, int len, uint8_t color) {
-    for (int i = 0; i < len; i++) vga_bb_putpixel(x + i, y, color);
-}
-
-void vga_bb_draw_vline(int x, int y, int len, uint8_t color) {
-    for (int i = 0; i < len; i++) vga_bb_putpixel(x, y + i, color);
-}
-
-void vga_bb_draw_char(int x, int y, char c, uint8_t fg, uint8_t bg) {
+/* Backbuffer Text Drawing */
+void vga_bb_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
     int idx = full_char_idx(c);
     const uint8_t *g = font8x8_full[idx];
     for (int r = 0; r < 8; r++) {
@@ -556,23 +355,16 @@ void vga_bb_draw_char(int x, int y, char c, uint8_t fg, uint8_t bg) {
         for (int col = 0; col < 8; col++) {
             if (bits & (0x80 >> col))
                 vga_bb_putpixel(x + col, y + r, fg);
-            else if (bg != 255)
+            else if ((bg >> 24) == 255)
                 vga_bb_putpixel(x + col, y + r, bg);
         }
     }
 }
 
-void vga_bb_draw_string(int x, int y, const char *str, uint8_t fg, uint8_t bg) {
+void vga_bb_draw_string(int x, int y, const char *str, uint32_t fg, uint32_t bg) {
     while (*str) {
         vga_bb_draw_char(x, y, *str, fg, bg);
-        x += 7; /* tighter spacing for GUI text */
+        x += 9;
         str++;
     }
-}
-
-void vga_bb_draw_rect_outline(int x, int y, int w, int h, uint8_t color) {
-    vga_bb_draw_hline(x, y, w, color);
-    vga_bb_draw_hline(x, y + h - 1, w, color);
-    vga_bb_draw_vline(x, y, h, color);
-    vga_bb_draw_vline(x + w - 1, y, h, color);
 }

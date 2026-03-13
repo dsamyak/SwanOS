@@ -40,6 +40,7 @@ extern void isr21(void); extern void isr22(void); extern void isr23(void);
 extern void isr24(void); extern void isr25(void); extern void isr26(void);
 extern void isr27(void); extern void isr28(void); extern void isr29(void);
 extern void isr30(void); extern void isr31(void);
+extern void isr128(void);
 
 extern void irq0(void);  extern void irq1(void);  extern void irq2(void);
 extern void irq3(void);  extern void irq4(void);  extern void irq5(void);
@@ -111,6 +112,9 @@ void idt_init(void) {
     idt_set_gate(29, (uint32_t)isr29, 0x08, 0x8E);
     idt_set_gate(30, (uint32_t)isr30, 0x08, 0x8E);
     idt_set_gate(31, (uint32_t)isr31, 0x08, 0x8E);
+    
+    /* Syscall INT 0x80 - ring 3 callable (0xEE) */
+    idt_set_gate(128, (uint32_t)isr128, 0x08, 0xEE);
 
     /* IRQs 0-15 → INT 32-47 */
     idt_set_gate(32, (uint32_t)irq0, 0x08, 0x8E);

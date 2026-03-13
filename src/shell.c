@@ -18,6 +18,7 @@
 #include "rtc.h"
 #include "game.h"
 #include "ports.h"
+#include "process.h"
 
 #define CMD_BUF 256
 #define OUT_BUF 4096
@@ -306,6 +307,13 @@ static void cmd_help(void) {
     screen_putchar((char)25);  /* ↓ */
     screen_print(" arrows for command history\n\n");
     screen_set_color(VGA_WHITE, VGA_BLACK);
+}
+
+static void ring3_crash_dummy(void) {
+    /* This process is spawned in Ring 3 User Space. 
+       Executing CLI without IOPL=3 will cause a General Protection Fault. */
+    __asm__ volatile ("cli");
+    while(1);
 }
 
 /* ── Execute command ───────────────────────────────────────── */
@@ -1030,6 +1038,18 @@ static int execute_command(char *input) {
     /* ── Login ── */
     if (strcmp(cmd, "login") == 0) {
         return -3;
+    }
+
+    /* ── Crash Test ── */
+    if (strcmp(cmd, "crash_test") == 0) {
+        screen_set_color(VGA_YELLOW, VGA_BLACK);
+        screen_print("\n   ");
+        screen_putchar((char)254);
+        screen_print(" Spawning volatile Ring 3 User process...\n");
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        
+        process_create(ring3_crash_dummy, 3);
+        return 0;
     }
 
     /* ── Unknown ── */

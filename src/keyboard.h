@@ -10,6 +10,7 @@
 void keyboard_init(void);
 char keyboard_getchar(void);     /* Blocking: waits for a key */
 int  keyboard_has_key(void);     /* Non-blocking: 1 if key available */
+void keyboard_flush(void);       /* Flush all buffered input */
 int  keyboard_read_line(char *buf, int max_len);  /* Read a line with editing */
 
 #endif

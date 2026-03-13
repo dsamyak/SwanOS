@@ -51,6 +51,20 @@ char *strchr(const char *s, int c) {
     return (c == '\0') ? (char *)s : 0;
 }
 
+char *strstr(const char *haystack, const char *needle) {
+    if (!*needle) return (char *)haystack;
+    for (const char *h = haystack; *h; h++) {
+        const char *h_iter = h;
+        const char *n_iter = needle;
+        while (*h_iter && *n_iter && *h_iter == *n_iter) {
+            h_iter++;
+            n_iter++;
+        }
+        if (!*n_iter) return (char *)h;
+    }
+    return 0;
+}
+
 void *memset(void *ptr, int val, size_t n) {
     /* Use x86 rep stosb for fast fill */
     __asm__ volatile (
