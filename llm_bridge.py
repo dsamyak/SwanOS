@@ -17,6 +17,9 @@ Protocol:
     \x01S<system_prompt>\x04 - Sets the system prompt
     \x01C\x04                - Clears the conversation history
     \x01T<temperature>\x04   - Sets the temperature (0.0 to 2.0)
+    \x01O<max_tokens>\x04    - Sets the max tokens for response
+    \x01P<top_p>\x04         - Sets the top-p sampling value (0.0 to 1.0)
+    \x01I\x04                - Returns current bridge info/status
 """
 
 import sys
@@ -71,6 +74,8 @@ def main():
     current_model = DEFAULT_MODEL
     current_system_prompt = DEFAULT_SYSTEM_PROMPT
     current_temperature = DEFAULT_TEMPERATURE
+    current_max_tokens = 256
+    current_top_p = 1.0
     conversation_history = []
     
     try:
@@ -81,15 +86,15 @@ def main():
             
             buffer = b""
             while True:
-                chunk = pipe_in.read(1)
+                chunk = pipe_in.read(1024)
                 if not chunk:
                     time.sleep(0.01)
                     continue
                     
                 buffer += chunk
                 
-                # Check for EOT marker (\x04)
-                if b'\x04' in buffer:
+                # Process all complete messages in the buffer (\x04)
+                while b'\x04' in buffer:
                     parts = buffer.split(b'\x04', 1)
                     raw_msg = parts[0]
                     buffer = parts[1]
@@ -133,6 +138,29 @@ def main():
                         except ValueError:
                             logger.error(f"Invalid temperature received: {payload}")
                             
+                    elif cmd_type == 'O': # Set Max Tokens
+                        try:
+                            tokens = int(payload)
+                            current_max_tokens = max(1, tokens)
+                            logger.info(f"Max tokens set to {current_max_tokens}")
+                        except ValueError:
+                            logger.error(f"Invalid max tokens received: {payload}")
+                            
+                    elif cmd_type == 'P': # Set Top P
+                        try:
+                            p_val = float(payload)
+                            current_top_p = max(0.0, min(1.0, p_val))
+                            logger.info(f"Top-P set to {current_top_p}")
+                        except ValueError:
+                            logger.error(f"Invalid Top-P received: {payload}")
+                            
+                    elif cmd_type == 'I': # Get Bridge Info
+                        logger.info("Responding to info/ping request")
+                        status_str = f"Bridge Active | Model: {current_model} | Temp: {current_temperature} | Top-P: {current_top_p} | MaxTokens: {current_max_tokens}"
+                        pipe_out.write(status_str.encode('utf-8') + b'\x04')
+                        pipe_out.flush()
+                        continue
+                            
                     elif cmd_type == 'Q': # LLM Query
                         logger.info(f"Query: {payload}")
                         
@@ -148,28 +176,35 @@ def main():
                         messages.extend(conversation_history)
                         messages.append({"role": "user", "content": payload})
                         
-                        # Query Groq
-                        try:
-                            completion = client.chat.completions.create(
-                                model=current_model,
-                                messages=messages,
-                                temperature=current_temperature,
-                                max_completion_tokens=256,
-                            )
-                            response = completion.choices[0].message.content.strip()
-                            logger.info(f"Response (len {len(response)})")
-                            
-                            # Update conversation history
-                            conversation_history.append({"role": "user", "content": payload})
-                            conversation_history.append({"role": "assistant", "content": response})
-                            
-                            # Prune history to avoid context limits
-                            if len(conversation_history) > MAX_HISTORY * 2:
-                                conversation_history = conversation_history[-(MAX_HISTORY * 2):]
+                        # Query Groq with Retry Logic
+                        max_retries = 3
+                        for attempt in range(max_retries):
+                            try:
+                                completion = client.chat.completions.create(
+                                    model=current_model,
+                                    messages=messages,
+                                    temperature=current_temperature,
+                                    max_completion_tokens=current_max_tokens,
+                                    top_p=current_top_p,
+                                )
+                                response = completion.choices[0].message.content.strip()
+                                logger.info(f"Response (len {len(response)})")
                                 
-                        except Exception as e:
-                            logger.error(f"Error querying Groq: {e}")
-                            response = f"API Error: {str(e)}"
+                                # Update conversation history
+                                conversation_history.append({"role": "user", "content": payload})
+                                conversation_history.append({"role": "assistant", "content": response})
+                                
+                                # Prune history to avoid context limits
+                                if len(conversation_history) > MAX_HISTORY * 2:
+                                    conversation_history = conversation_history[-(MAX_HISTORY * 2):]
+                                break # Successful query, exit retry loop
+                                    
+                            except Exception as e:
+                                logger.error(f"Error querying Groq (Attempt {attempt + 1}/{max_retries}): {e}")
+                                if attempt < max_retries - 1:
+                                    time.sleep(2 ** attempt) # Exponential backoff
+                                else:
+                                    response = f"API Error: {str(e)}"
                             
                         # Send back to OS
                         pipe_out.write(response.encode('utf-8') + b'\x04')

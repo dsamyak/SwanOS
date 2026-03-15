@@ -57,34 +57,41 @@
 #define B_KICKOFF_HL 0xFF2980B9   /* Kickoff highlight */
 #define B_SHADOW     0x50000000   /* Drop shadow */
 
-/* Wallpaper gradient — KDE-style blue-purple */
-#define W_TOP        0xFF0D1B2A   /* Deep navy */
-#define W_MID        0xFF1B2838   /* Mid blue */
-#define W_BOT        0xFF1A1028   /* Purple tint */
+/* Wallpaper gradient — Modern Vibrant */
+#define W_TOP        0xFF150A21   /* Deep indigo */
+#define W_MID        0xFF4E1A47   /* Vibrant magenta */
+#define W_BOT        0xFF0D2840   /* Deep cyan/ocean  */
 
 /* ── Icons ────────────────────────────────────────────────── */
+#define MAX_WINDOWS 8
+#define WIN_TERM 0
+#define WIN_FILES 1
+#define WIN_NOTES 2
+#define WIN_ABOUT 3
+#define WIN_AI 4
+#define WIN_CALC 5
+#define WIN_SYSMON 6
+
 #define ICON_W     80
 #define ICON_H     80
 #define MAX_ICONS  5
 
 typedef struct { int x, y; const char *label; int app_id; } desktop_icon_t;
 
+#undef MAX_ICONS
+#define MAX_ICONS 7
 static desktop_icon_t icons[MAX_ICONS] = {
-    {50, 40,   "AI Chat",  5},
-    {50, 150,  "Terminal", 0},
-    {50, 260,  "Files",    1},
-    {50, 370,  "Notes",    2},
-    {50, 480,  "About",    3},
+    {50, 40,   "AI Chat",  WIN_AI},
+    {50, 150,  "Terminal", WIN_TERM},
+    {50, 260,  "Files",    WIN_FILES},
+    {50, 370,  "Notes",    WIN_NOTES},
+    {50, 480,  "About",    WIN_ABOUT},
+    {50, 590,  "Calc",     WIN_CALC},
+    {50, 700,  "SysMon",   WIN_SYSMON},
 };
-static int num_icons = 5;
+static int num_icons = 7;
 
 /* ── Windows ──────────────────────────────────────────────── */
-#define MAX_WINDOWS 6
-#define WIN_TERM 0
-#define WIN_FILES 1
-#define WIN_NOTES 2
-#define WIN_ABOUT 3
-#define WIN_AI 4
 
 typedef struct {
     int active, x, y, w, h, type;
@@ -97,6 +104,11 @@ typedef struct {
     int note_len, note_cursor;
     char note_file[20];
     int file_sel;
+    int calc_v1;
+    int calc_op;
+    int calc_new;
+    int sysmon_history[60];
+    int sysmon_head;
 } window_t;
 
 static window_t windows[MAX_WINDOWS];
@@ -107,16 +119,16 @@ static int dragging = 0, drag_win = -1, drag_ox, drag_oy;
 /* ── Kickoff Menu ─────────────────────────────────────────── */
 static int kickoff_open = 0;
 #define KO_W     280
-#define KO_ITEMS  7
+#define KO_ITEMS  9
 #define KO_ITEM_H 36
 #define KO_HEADER  64
 #define KO_H      (KO_HEADER + KO_ITEMS * KO_ITEM_H + 8)
 
 static const char *ko_labels[KO_ITEMS] = {
-    "AI Chat", "Terminal", "Files", "Notes", "About",
+    "AI Chat", "Terminal", "Files", "Notes", "Calc", "SysMonitor", "About",
     "--------", "Shut Down"
 };
-static int ko_ids[KO_ITEMS] = {5,0,1,2,3,-1,-2};
+static int ko_ids[KO_ITEMS] = {WIN_AI,WIN_TERM,WIN_FILES,WIN_NOTES,WIN_CALC,WIN_SYSMON,WIN_ABOUT,-1,-2};
 
 /* ── Wallpaper cache ──────────────────────────────────────── */
 static int wp_cached = 0;
@@ -135,16 +147,15 @@ static void render_wallpaper(void) {
         /* 3-point gradient: top→mid→bottom */
         uint32_t c;
         int half = DESK_H / 2;
-        if (y < half)
-            c = ARGB(255,
-                13 + (27-13)*y/half,
-                27 + (40-27)*y/half,
-                42 + (56-42)*y/half);
-        else
-            c = ARGB(255,
-                27 + (26-27)*(y-half)/half,
-                40 + (16-40)*(y-half)/half,
-                56 + (40-56)*(y-half)/half);
+        if (y < half) {
+            uint32_t tr=(W_TOP>>16)&0xFF, tg=(W_TOP>>8)&0xFF, tb=W_TOP&0xFF;
+            uint32_t mr=(W_MID>>16)&0xFF, mg=(W_MID>>8)&0xFF, mb=W_MID&0xFF;
+            c = ARGB(255, tr + (mr-tr)*y/half, tg + (mg-tg)*y/half, tb + (mb-tb)*y/half);
+        } else {
+            uint32_t mr=(W_MID>>16)&0xFF, mg=(W_MID>>8)&0xFF, mb=W_MID&0xFF;
+            uint32_t br=(W_BOT>>16)&0xFF, bg=(W_BOT>>8)&0xFF, bb=W_BOT&0xFF;
+            c = ARGB(255, mr + (br-mr)*(y-half)/half, mg + (bg-mg)*(y-half)/half, mb + (bb-mb)*(y-half)/half);
+        }
         for (int x = 0; x < GFX_W; x++)
             wp_buf[y * GFX_W + x] = c;
     }
@@ -192,36 +203,62 @@ static void draw_wallpaper(void) {
 
 /* ── Desktop icons (Breeze style) ─────────────────────────── */
 static void draw_icon_glyph(int x, int y, int app_id) {
-    /* Icon area with rounded translucent bg on hover (simplified: always show plate) */
-    vga_bb_fill_rounded_rect(x+4, y+2, 56, 46, 8, 0x18FFFFFF);
+    /* Richer drop shadows for icons */
+    vga_bb_fill_rounded_rect(x+6, y+4, 56, 46, 12, B_SHADOW);
+    /* Frosted glass plate */
+    vga_bb_fill_rounded_rect_gradient(x+4, y+2, 56, 46, 10, 0x2AFFFFFF, 0x10FFFFFF);
+    vga_bb_draw_rect_outline(x+4, y+2, 56, 46, 0x33FFFFFF);
     int cx = x + 16, cy = y + 8;
     switch (app_id) {
         case 0: /* Terminal — Konsole style */
             vga_bb_fill_rounded_rect(cx-2, cy, 32, 24, 4, B_BG_DARK);
+            vga_bb_fill_rect(cx-2, cy, 32, 6, B_TITLEBAR);
             vga_bb_draw_rect_outline(cx-2, cy, 32, 24, B_ACCENT);
-            vga_bb_draw_string_2x(cx+2, cy+4, ">_", B_GREEN, 0x00000000);
+            vga_bb_draw_string_2x(cx, cy+7, ">_", B_GREEN, 0x00000000);
+            vga_bb_fill_circle(cx+26, cy+3, 1, B_RED);
             break;
         case 1: /* Files — Dolphin style */
-            vga_bb_fill_rounded_rect(cx, cy, 28, 22, 4, B_ACCENT);
-            vga_bb_fill_rounded_rect(cx-4, cy+4, 8, 3, 2, B_ACCENT2);
-            vga_bb_fill_rect(cx+2, cy+4, 24, 16, B_BG_ALT);
+            vga_bb_fill_rounded_rect(cx, cy, 28, 22, 4, B_ACCENT2); /* Back folder flap */
+            vga_bb_fill_rounded_rect(cx-4, cy+4, 10, 3, 2, B_ACCENT2);
+            vga_bb_fill_rounded_rect(cx-2, cy+6, 30, 18, 4, B_ACCENT); /* Front flap */
+            vga_bb_fill_rect(cx+2, cy+8, 22, 12, B_BG_ALT);
             break;
-        case 2: /* Notes — KWrite style */
+        case 2: /* Notes — Richer pages */
+            vga_bb_fill_rounded_rect(cx-1, cy+1, 24, 26, 3, B_SHADOW);
             vga_bb_fill_rounded_rect(cx, cy, 24, 26, 3, B_TEXT);
             vga_bb_fill_rect(cx+2, cy+2, 20, 22, B_BG_LIGHT);
             for (int i = 0; i < 4; i++)
-                vga_bb_draw_hline(cx+4, cy+6+i*5, 14, B_TEXT_DIM);
+                vga_bb_draw_hline(cx+4, cy+6+i*5, 14, B_ACCENT);
             break;
         case 3: /* About — info */
+            vga_bb_fill_circle(cx+13, cy+13, 12, B_SHADOW);
             vga_bb_fill_circle(cx+12, cy+12, 12, B_ACCENT);
             vga_bb_fill_circle(cx+12, cy+12, 10, B_BG);
             vga_bb_draw_string_2x(cx+6, cy+5, "i", B_ACCENT, 0x00000000);
+            vga_bb_draw_string_2x(cx+6, cy+5, "i", 0x80000000, 0x00000000); /* Drop shadow on i */
+            vga_bb_draw_string_2x(cx+6, cy+4, "i", B_ACCENT, 0x00000000);
             break;
-        case 5: /* AI Chat */
+        case WIN_AI: /* AI Chat */
+            vga_bb_fill_rounded_rect(cx-1, cy+1, 32, 26, 6, B_SHADOW);
             vga_bb_fill_rounded_rect(cx-2, cy, 32, 26, 6, B_ACCENT);
             vga_bb_fill_rounded_rect(cx, cy+2, 28, 22, 5, B_BG);
+            vga_bb_draw_string_2x(cx+3, cy+6, "AI", 0x80000000, 0x00000000);
             vga_bb_draw_string_2x(cx+2, cy+5, "AI", B_ACCENT, 0x00000000);
             vga_bb_fill_circle(cx+28, cy+2, 4, B_YELLOW);
+            break;
+        case WIN_CALC:
+            vga_bb_fill_rounded_rect(cx-2, cy, 28, 34, 4, B_BG_DARK);
+            vga_bb_draw_rect_outline(cx-2, cy, 28, 34, B_ACCENT2);
+            vga_bb_fill_rect(cx, cy+4, 24, 8, B_BG_ALT);
+            vga_bb_draw_string_2x(cx+10, cy+1, "=", B_GREEN, 0x00000000);
+            for(int yy=0;yy<3;yy++) for(int xx=0;xx<3;xx++) vga_bb_fill_rect(cx+2+xx*8, cy+16+yy*6, 6, 4, B_SEPARATOR);
+            break;
+        case WIN_SYSMON:
+            vga_bb_fill_rounded_rect(cx-2, cy, 32, 28, 4, B_WIN_BG);
+            vga_bb_draw_rect_outline(cx-2, cy, 32, 28, B_ACCENT);
+            vga_bb_fill_rect(cx+2, cy+16, 6, 10, B_GREEN);
+            vga_bb_fill_rect(cx+10, cy+10, 6, 16, B_YELLOW);
+            vga_bb_fill_rect(cx+18, cy+6, 6, 20, B_RED);
             break;
     }
 }
@@ -239,112 +276,168 @@ static void draw_icons(void) {
     }
 }
 
-/* ── Panel (KDE Plasma bottom panel) ──────────────────────── */
+/* Dock Layout Globals for Clicks */
+static int dock_x = 0, dock_w = 0, dock_y = 0;
+static int kickoff_x = 0;
+
+/* ── Panel (Floating Dock) ──────────────────────── */
 static void draw_panel(void) {
-    int py = DESK_H;
-    /* Semi-transparent dark panel */
-    vga_bb_fill_rect_alpha(0, py, SCRW, PANEL_H, B_PANEL);
-    /* Top edge line */
-    vga_bb_draw_hline(0, py, SCRW, B_SEPARATOR);
+    /* Calculate required dock width */
+    int wins_w = 0;
+    for (int i = 0; i < win_order_count; i++) {
+        int wi = win_order[i];
+        if (!windows[wi].active) continue;
+        int bw = (int)strlen(windows[wi].title) * CW + 20;
+        if (bw > 200) bw = 200;
+        wins_w += bw + 8;
+    }
+    
+    dock_w = 56 + 16 /* launcher + prepad */ + wins_w + 240 /* tray */;
+    if (dock_w > SCRW - 40) dock_w = SCRW - 40;
+    dock_x = (SCRW - dock_w) / 2;
+    dock_y = SCRH - PANEL_H - 12;
+
+    /* Dock shadow */
+    vga_bb_fill_rounded_rect(dock_x-4, dock_y-2, dock_w+8, PANEL_H+10, 16, B_SHADOW);
+    /* Frosted glass / translucent dock */
+    vga_bb_fill_rounded_rect(dock_x, dock_y, dock_w, PANEL_H, 12, B_PANEL);
+    vga_bb_draw_rect_outline(dock_x, dock_y, dock_w, PANEL_H, 0x33FFFFFF);
 
     /* App launcher button (KDE logo area) */
     mouse_state_t ms; mouse_get_state(&ms);
-    int lhover = (ms.x >= 2 && ms.x < 50 && ms.y >= py);
+    int lhover = (ms.x >= dock_x+8 && ms.x < dock_x+54 && ms.y >= dock_y);
+    kickoff_x = dock_x + 8; /* Save for kickoff menu opening */
+    
     if (lhover || kickoff_open)
-        vga_bb_fill_rounded_rect(2, py+4, 46, PANEL_H-8, 6, B_HOVER);
+        vga_bb_fill_rounded_rect(dock_x+8, dock_y+4, 46, PANEL_H-8, 8, B_HOVER);
+        
     /* Simple KDE-like icon: circle with 3 dots */
-    vga_bb_fill_circle(25, py + PANEL_H/2, 12, B_ACCENT);
-    vga_bb_fill_circle(25, py + PANEL_H/2, 10, B_BG_DARK);
+    vga_bb_fill_circle(dock_x+31, dock_y + PANEL_H/2, 12, B_ACCENT);
+    vga_bb_fill_circle(dock_x+31, dock_y + PANEL_H/2, 10, B_BG_DARK);
     /* Three horizontal lines (hamburger) */
-    vga_bb_draw_hline(19, py+PANEL_H/2-4, 12, B_TEXT);
-    vga_bb_draw_hline(19, py+PANEL_H/2,   12, B_TEXT);
-    vga_bb_draw_hline(19, py+PANEL_H/2+4, 12, B_TEXT);
+    vga_bb_draw_hline(dock_x+25, dock_y+PANEL_H/2-4, 12, B_TEXT);
+    vga_bb_draw_hline(dock_x+25, dock_y+PANEL_H/2,   12, B_TEXT);
+    vga_bb_draw_hline(dock_x+25, dock_y+PANEL_H/2+4, 12, B_TEXT);
 
     /* Task manager — window buttons */
-    int bx = 56;
+    int bx = dock_x + 64;
     /* Separator */
-    vga_bb_draw_vline(bx-2, py+8, PANEL_H-16, B_SEPARATOR);
+    vga_bb_draw_vline(bx-4, dock_y+8, PANEL_H-16, B_SEPARATOR);
 
-    for (int i = 0; i < win_order_count && bx < SCRW - 300; i++) {
+    for (int i = 0; i < win_order_count && bx < dock_x + dock_w - 250; i++) {
         int wi = win_order[i];
         if (!windows[wi].active) continue;
         int focused = (wi == win_focus);
         int bw = (int)strlen(windows[wi].title) * CW + 20;
         if (bw > 200) bw = 200;
         /* Hover check */
-        int thover = (ms.x >= bx && ms.x < bx+bw && ms.y >= py+4 && ms.y < py+PANEL_H-4);
+        int thover = (ms.x >= bx && ms.x < bx+bw && ms.y >= dock_y+4 && ms.y < dock_y+PANEL_H-4);
         if (focused) {
-            vga_bb_fill_rounded_rect(bx, py+4, bw, PANEL_H-8, 6, B_HOVER);
-            /* Active indicator — accent blue line below */
-            vga_bb_fill_rounded_rect(bx+8, py+PANEL_H-6, bw-16, 3, 1, B_ACCENT);
+            vga_bb_fill_rounded_rect(bx, dock_y+4, bw, PANEL_H-8, 6, B_HOVER);
+            /* Active indicator — accent blue pill below */
+            vga_bb_fill_rounded_rect(bx+bw/2-8, dock_y+PANEL_H-6, 16, 3, 1, B_ACCENT);
         } else if (thover) {
-            vga_bb_fill_rounded_rect(bx, py+4, bw, PANEL_H-8, 6, 0xFF2A2D31);
+            vga_bb_fill_rounded_rect(bx, dock_y+4, bw, PANEL_H-8, 6, 0xFF2A2D31);
         }
-        vga_bb_draw_string_2x(bx+10, py+14, windows[wi].title, B_TEXT, 0x00000000);
-        bx += bw + 4;
+        vga_bb_draw_string_2x(bx+11, dock_y+15, windows[wi].title, 0x80000000, 0x00000000); /* shadow */
+        vga_bb_draw_string_2x(bx+10, dock_y+14, windows[wi].title, B_TEXT, 0x00000000);
+        bx += bw + 8;
     }
 
     /* ── System tray (right side) ── */
     /* Separator before tray */
-    int tx = SCRW - 250;
-    vga_bb_draw_vline(tx, py+8, PANEL_H-16, B_SEPARATOR);
+    int tx = dock_x + dock_w - 240;
+    vga_bb_draw_vline(tx, dock_y+8, PANEL_H-16, B_SEPARATOR);
 
     /* Memory indicator */
     char mb[16]; char tmp[8];
     itoa(mem_used()/1024, tmp, 10);
     strcpy(mb, tmp); strcat(mb, "K");
-    vga_bb_draw_string_2x(tx+8, py+14, mb, B_TEXT_DIM, 0x00000000);
+    vga_bb_draw_string_2x(tx+9, dock_y+15, mb, 0x80000000, 0x00000000); /* shadow */
+    vga_bb_draw_string_2x(tx+8, dock_y+14, mb, B_TEXT_DIM, 0x00000000);
 
     /* Clock */
     rtc_time_t rtc; rtc_read(&rtc);
     char clk[10]; rtc_format_time(&rtc, clk);
-    int clk_x = SCRW - (int)strlen(clk) * CW - 16;
-    vga_bb_draw_string_2x(clk_x, py+14, clk, B_TEXT, 0x00000000);
+    int clk_x = dock_x + dock_w - (int)strlen(clk) * CW - 16;
+    vga_bb_draw_string_2x(clk_x+1, dock_y+15, clk, 0x80000000, 0x00000000); /* shadow */
+    vga_bb_draw_string_2x(clk_x, dock_y+14, clk, B_TEXT, 0x00000000);
+
 }
 
-/* ── Kickoff Menu (KDE-style app launcher) ────────────────── */
+/* ── Context Menu ─────────────────────────────────────────── */
+static int ctx_menu_open = 0;
+static int ctx_menu_x = 0;
+static int ctx_menu_y = 0;
+#define CTX_W 240
+#define CTX_ITEMS 3
+#define CTX_ITEM_H 36
+#define CTX_H (CTX_ITEMS * CTX_ITEM_H + 8)
+static const char *ctx_labels[CTX_ITEMS] = { "New Note", "System Monitor", "Refresh Wallpaper" };
+
+static void draw_context_menu(void) {
+    if (!ctx_menu_open) return;
+    vga_bb_fill_rounded_rect(ctx_menu_x+4, ctx_menu_y+4, CTX_W, CTX_H, 8, B_SHADOW);
+    vga_bb_fill_rounded_rect(ctx_menu_x, ctx_menu_y, CTX_W, CTX_H, 6, B_KICKOFF);
+    vga_bb_draw_rect_outline(ctx_menu_x, ctx_menu_y, CTX_W, CTX_H, B_SEPARATOR);
+    mouse_state_t ms; mouse_get_state(&ms);
+    for (int i=0; i<CTX_ITEMS; i++) {
+        int iy = ctx_menu_y + 4 + i*CTX_ITEM_H;
+        int hover = (ms.x >= ctx_menu_x+4 && ms.x < ctx_menu_x+CTX_W-4 && ms.y >= iy && ms.y < iy+CTX_ITEM_H);
+        if (hover) vga_bb_fill_rounded_rect(ctx_menu_x+4, iy+2, CTX_W-8, CTX_ITEM_H-4, 4, B_KICKOFF_HL);
+        vga_bb_draw_string_2x(ctx_menu_x+10, iy+10, ctx_labels[i], B_TEXT, 0x00000000);
+    }
+}
+
+/* ── Kickoff Menu (Centered above launcher) ───────────────── */
 static void draw_kickoff(void) {
     if (!kickoff_open) return;
-    int mx_top = DESK_H - KO_H;
+    int mx_top = dock_y - KO_H - 12;
+    int mx_left = kickoff_x;
+
+    /* Drop shadow for menu */
+    vga_bb_fill_rounded_rect(mx_left+4, mx_top+4, KO_W, KO_H, 12, B_SHADOW);
 
     /* Dark rounded menu background */
-    vga_bb_fill_rounded_rect(0, mx_top, KO_W, KO_H, 10, B_KICKOFF);
-    vga_bb_draw_rect_outline(0, mx_top, KO_W, KO_H, B_SEPARATOR);
+    vga_bb_fill_rounded_rect_gradient(mx_left, mx_top, KO_W, KO_H, 10, B_KICKOFF, 0xFF14171A);
+    vga_bb_draw_rect_outline(mx_left, mx_top, KO_W, KO_H, B_SEPARATOR);
 
     /* Header: user info */
-    vga_bb_fill_rounded_rect(8, mx_top+8, KO_W-16, KO_HEADER-16, 8, B_BG_ALT);
+    vga_bb_fill_rounded_rect(mx_left+8, mx_top+8, KO_W-16, KO_HEADER-16, 8, B_BG_ALT);
     /* User avatar circle */
-    vga_bb_fill_circle(36, mx_top+32, 16, B_ACCENT);
-    vga_bb_fill_circle(36, mx_top+32, 14, B_BG_DARK);
-    vga_bb_draw_string_2x(26, mx_top+26, user_current()[0] ? (char[]){user_current()[0],0} : "U",
-                          B_ACCENT, 0x00000000);
+    vga_bb_fill_circle(mx_left+36, mx_top+32, 16, B_ACCENT);
+    vga_bb_fill_circle(mx_left+36, mx_top+32, 14, B_BG_DARK);
+    vga_bb_draw_string_2x(mx_left+27, mx_top+27, user_current()[0] ? (char[]){user_current()[0],0} : "U", 0x80000000, 0);
+    vga_bb_draw_string_2x(mx_left+26, mx_top+26, user_current()[0] ? (char[]){user_current()[0],0} : "U", B_ACCENT, 0);
     /* Username */
-    vga_bb_draw_string_2x(62, mx_top+20, user_current(), B_TEXT, 0x00000000);
-    vga_bb_draw_string_2x(62, mx_top+38, "SwanOS User", B_TEXT_DIM, 0x00000000);
+    vga_bb_draw_string_2x(mx_left+63, mx_top+21, user_current(), 0x80000000, 0);
+    vga_bb_draw_string_2x(mx_left+62, mx_top+20, user_current(), B_TEXT, 0);
+    vga_bb_draw_string_2x(mx_left+62, mx_top+38, "SwanOS User", B_TEXT_DIM, 0);
 
     /* Separator */
-    vga_bb_draw_hline(12, mx_top + KO_HEADER - 4, KO_W-24, B_SEPARATOR);
+    vga_bb_draw_hline(mx_left+12, mx_top + KO_HEADER - 4, KO_W-24, B_SEPARATOR);
 
     /* Menu items */
     mouse_state_t ms; mouse_get_state(&ms);
     for (int i = 0; i < KO_ITEMS; i++) {
         int iy = mx_top + KO_HEADER + i * KO_ITEM_H;
         if (ko_labels[i][0] == '-') {
-            vga_bb_draw_hline(16, iy + KO_ITEM_H/2, KO_W - 32, B_SEPARATOR);
+            vga_bb_draw_hline(mx_left+16, iy + KO_ITEM_H/2, KO_W - 32, B_SEPARATOR);
             continue;
         }
-        int hover = (ms.x >= 4 && ms.x < KO_W-4 &&
+        int hover = (ms.x >= mx_left+4 && ms.x < mx_left+KO_W-4 &&
                      ms.y >= iy && ms.y < iy + KO_ITEM_H);
         if (hover)
-            vga_bb_fill_rounded_rect(4, iy+2, KO_W-8, KO_ITEM_H-4, 6, B_KICKOFF_HL);
+            vga_bb_fill_rounded_rect(mx_left+4, iy+2, KO_W-8, KO_ITEM_H-4, 6, B_KICKOFF_HL);
 
         /* Small icon indicator */
         uint32_t ic = (i == KO_ITEMS-1) ? B_RED : B_ACCENT;
-        vga_bb_fill_circle(24, iy + KO_ITEM_H/2, 6, ic);
-        vga_bb_fill_circle(24, iy + KO_ITEM_H/2, 4, B_BG_DARK);
+        vga_bb_fill_circle(mx_left+24, iy + KO_ITEM_H/2, 6, ic);
+        vga_bb_fill_circle(mx_left+24, iy + KO_ITEM_H/2, 4, B_BG_DARK);
 
         uint32_t fc = (i == KO_ITEMS-1) ? B_RED : B_TEXT;
-        vga_bb_draw_string_2x(40, iy + 10, ko_labels[i], fc, 0x00000000);
+        if (hover) vga_bb_draw_string_2x(mx_left+41, iy + 11, ko_labels[i], 0x80000000, 0);
+        vga_bb_draw_string_2x(mx_left+40, iy + 10, ko_labels[i], fc, 0x00000000);
     }
 }
 
@@ -377,6 +470,8 @@ static void draw_window(int wi) {
     /* Title text (centered in title bar) */
     int tw = (int)strlen(w->title) * CW;
     int ttx = w->x + (w->w - tw) / 2;
+    vga_bb_draw_string_2x(ttx+2, w->y+10, w->title, B_SHADOW, 0x00000000);
+    vga_bb_draw_string_2x(ttx+1, w->y+9, w->title, 0x80000000, 0x00000000);
     vga_bb_draw_string_2x(ttx, w->y+8, w->title, B_TEXT, 0x00000000);
 
     /* Breeze window buttons: close (red) • maximize (accent) • minimize (accent) */
@@ -490,7 +585,7 @@ static void draw_window(int wi) {
         int ay = cy + 12;
         vga_bb_draw_string_2x(cx+12, ay, "SwanOS", B_ACCENT, 0x00000000);
         ay += CH+6;
-        vga_bb_draw_string_2x(cx+12, ay, "Version 3.0", B_TEXT, 0x00000000);
+        vga_bb_draw_string_2x(cx+12, ay, "Version 2.0", B_TEXT, 0x00000000);
         ay += CH+6;
         vga_bb_draw_hline(cx+12, ay, cw-24, B_SEPARATOR);
         ay += 8;
@@ -508,6 +603,44 @@ static void draw_window(int wi) {
         ay += CH+8;
         vga_bb_draw_string_2x(cx+12, ay, "User:", B_TEXT_DIM, 0x00000000);
         vga_bb_draw_string_2x(cx+12+6*CW, ay, user_current(), B_ACCENT, 0x00000000);
+    }
+    else if (w->type == WIN_CALC) {
+        vga_bb_fill_rect(cx, cy, cw, ch, B_BG_DARK);
+        vga_bb_fill_rounded_rect(cx+10, cy+10, cw-20, 60, 4, B_BG_ALT);
+        int tw = (int)strlen(w->input) * CW;
+        vga_bb_draw_string_2x(cx+cw-10-tw-8, cy+30, w->input, B_TEXT, 0x00000000);
+        const char* btns[20] = { "C", " ", " ", "/", "7", "8", "9", "*", "4", "5", "6", "-", "1", "2", "3", "+", "0", "0", ".", "=" };
+        int bw = (cw - 50) / 4; int bh = (ch - 90 - 40) / 5;
+        for (int i=0; i<20; i++) {
+            if (i == 17) continue; /* merged zero */
+            int bx = cx + 10 + (i%4)*(bw+10); int by = cy + 80 + (i/4)*(bh+10);
+            int rbw = bw; if (i == 16) rbw = bw*2 + 10;
+            uint32_t bg = B_WIN_BG; if (i%4 == 3 || i == 19) bg = B_ACCENT2; else if (i < 3) bg = B_SEPARATOR;
+            vga_bb_fill_rounded_rect(bx, by, rbw, bh, 6, bg);
+            int sw = (int)strlen(btns[i]) * CW;
+            vga_bb_draw_string_2x(bx+(rbw-sw)/2, by+(bh-CH)/2, btns[i], B_TEXT, 0x00000000);
+        }
+    }
+    else if (w->type == WIN_SYSMON) {
+        vga_bb_fill_rect(cx, cy, cw, ch, B_BG_DARK);
+        vga_bb_draw_string_2x(cx+10, cy+10, "Memory Usage History", B_ACCENT, 0x00000000);
+        vga_bb_draw_hline(cx+10, cy+40, cw-20, B_SEPARATOR);
+        int g_x = cx+20, g_y = cy+60, g_w = cw-40, g_h = ch-120;
+        vga_bb_fill_rect(g_x, g_y, g_w, g_h, B_WIN_BG);
+        vga_bb_draw_rect_outline(g_x, g_y, g_w, g_h, B_BORDER);
+        int max_m = mem_total() / 1024; if (max_m <= 0) max_m = 131072;
+        int bar_w = g_w / 60;
+        for (int i=0; i<60; i++) {
+            int val = w->sysmon_history[(w->sysmon_head + i) % 60];
+            if (val > 0) {
+                int bh = (val * g_h) / max_m; if (bh > g_h) bh = g_h;
+                uint32_t bc = B_GREEN; if (bh > g_h/2) bc = B_YELLOW; if (bh > (g_h*4)/5) bc = B_RED;
+                vga_bb_fill_rect(g_x + i*bar_w + 1, g_y + g_h - bh, bar_w-2, bh, bc);
+            }
+        }
+        char mtext[60]; char tmp[16]; strcpy(mtext, "Used: "); itoa(mem_used()/1024, tmp, 10); strcat(mtext, tmp);
+        strcat(mtext, " KB / "); itoa(max_m, tmp, 10); strcat(mtext, tmp); strcat(mtext, " KB");
+        vga_bb_draw_string_2x(cx+20, cy+ch-40, mtext, B_TEXT, 0x00000000);
     }
 }
 
@@ -565,7 +698,7 @@ static void open_window(int type) {
     int wi=find_free_window(); if (wi<0) return;
     window_t *w=&windows[wi]; memset(w,0,sizeof(window_t)); w->active=1; w->type=type;
     switch (type) {
-        case WIN_TERM: strcpy(w->title,"Konsole"); w->x=280;w->y=120;w->w=820;w->h=520;
+        case WIN_TERM: strcpy(w->title,"Console"); w->x=280;w->y=120;w->w=820;w->h=520;
             term_add_line(w,"SwanOS Terminal"); term_add_line(w,"Type 'help'"); break;
         case WIN_FILES: strcpy(w->title,"Dolphin"); w->x=320;w->y=180;w->w=820;w->h=520; w->file_sel=0; break;
         case WIN_NOTES: strcpy(w->title,"KWrite"); w->x=360;w->y=220;w->w=820;w->h=520;
@@ -574,6 +707,8 @@ static void open_window(int type) {
         case WIN_ABOUT: strcpy(w->title,"About"); w->x=420;w->y=280;w->w=620;w->h=420; break;
         case WIN_AI: strcpy(w->title,"AI Chat"); w->x=240;w->y=80;w->w=840;w->h=620;
             term_add_line(w,"SwanOS AI Assistant"); term_add_line(w,"Ask me anything!"); break;
+        case WIN_CALC: strcpy(w->title,"Calculator"); w->x=500;w->y=160;w->w=320;w->h=460; w->input[0]='0'; w->input[1]='\0'; w->calc_new=1; break;
+        case WIN_SYSMON: strcpy(w->title,"System Monitor"); w->x=600;w->y=300;w->w=560;w->h=380; w->sysmon_head=0; memset(w->sysmon_history,0,sizeof(w->sysmon_history)); break;
     }
     win_order[win_order_count++]=wi; win_focus=wi;
 }
@@ -617,10 +752,20 @@ static void term_process_cmd(window_t *w) {
 
 /* ── Click handling ───────────────────────────────────────── */
 static int handle_click(int mx, int my) {
+    if (ctx_menu_open) {
+        if (mx >= ctx_menu_x && mx < ctx_menu_x+CTX_W && my >= ctx_menu_y && my < ctx_menu_y+CTX_H) {
+            int idx = (my - ctx_menu_y - 4) / CTX_ITEM_H;
+            if (idx == 0) open_window(WIN_NOTES);
+            else if (idx == 1) open_window(WIN_SYSMON);
+            else if (idx == 2) wp_cached = 0;
+        }
+        ctx_menu_open = 0; return 0;
+    }
     if (kickoff_open) {
-        int mt = DESK_H - KO_H;
-        if (mx>=0 && mx<KO_W && my>=mt+KO_HEADER && my<DESK_H) {
-            int idx=(my-mt-KO_HEADER)/KO_ITEM_H;
+        int mx_top = dock_y - KO_H - 12;
+        int mx_left = kickoff_x;
+        if (mx>=mx_left && mx<mx_left+KO_W && my>=mx_top+KO_HEADER && my<mx_top+KO_H) {
+            int idx=(my-mx_top-KO_HEADER)/KO_ITEM_H;
             if (idx>=0 && idx<KO_ITEMS && ko_labels[idx][0]!='-') {
                 kickoff_open=0; int aid=ko_ids[idx];
                 if (aid==-2) return -1;
@@ -632,13 +777,13 @@ static int handle_click(int mx, int my) {
         kickoff_open=0; return 0;
     }
     /* Panel launcher */
-    if (my>=DESK_H && mx<50) { kickoff_open=!kickoff_open; return 0; }
+    if (my>=dock_y && my<dock_y+PANEL_H && mx>=dock_x && mx<dock_x+64) { kickoff_open=!kickoff_open; return 0; }
     /* Panel task buttons */
-    if (my>=DESK_H) {
-        int bx=56;
+    if (my>=dock_y && my<dock_y+PANEL_H) {
+        int bx=dock_x + 64;
         for (int i=0;i<win_order_count;i++) { int wi=win_order[i]; if(!windows[wi].active) continue;
             int bw=(int)strlen(windows[wi].title)*CW+20; if(bw>200) bw=200;
-            if (mx>=bx&&mx<bx+bw) { bring_to_front(wi); return 0; } bx+=bw+4; }
+            if (mx>=bx&&mx<bx+bw) { bring_to_front(wi); return 0; } bx+=bw+8; }
         return 0;
     }
     /* Windows (top z first) */
@@ -653,13 +798,55 @@ static int handle_click(int mx, int my) {
             if (my>=w->y&&my<w->y+TITLEBAR_H) { dragging=1;drag_win=wi;drag_ox=mx-w->x;drag_oy=my-w->y; return 0; }
             /* Files click */
             if (w->type==WIN_FILES) { int cy=w->y+TITLEBAR_H+CH+14; int idx=(my-cy)/(CH+4); if(idx>=0) w->file_sel=idx; }
+            /* Calc click */
+            if (w->type == WIN_CALC) {
+                int cx2 = w->x+4, cy2 = w->y+TITLEBAR_H+4, cw2 = w->w-8, ch2 = w->h-TITLEBAR_H-8;
+                int bw = (cw2 - 50) / 4, bh = (ch2 - 90 - 40) / 5;
+                for (int i=0; i<20; i++) {
+                    if (i == 17) continue;
+                    int bx = cx2 + 10 + (i%4)*(bw+10), by = cy2 + 80 + (i/4)*(bh+10);
+                    int rbw = bw; if (i == 16) rbw = bw*2 + 10;
+                    if (mx >= bx && mx < bx+rbw && my >= by && my < by+bh) {
+                        const char* btns[20] = { "C", " ", " ", "/", "7", "8", "9", "*", "4", "5", "6", "-", "1", "2", "3", "+", "0", "0", ".", "=" };
+                        char btn = btns[i][0];
+                        if (btn >= '0' && btn <= '9') {
+                            if (w->calc_new || w->input[0]=='0') { w->input[0]=btn; w->input[1]='\0'; w->calc_new=0; }
+                            else { int l = strlen(w->input); if (l < 15) { w->input[l]=btn; w->input[l+1]='\0'; } }
+                        }
+                        else if (i == 0) { w->input[0]='0'; w->input[1]='\0'; w->calc_new=1; w->calc_v1=0; w->calc_op=0; }
+                        else if (btn == '+' || btn == '-' || btn == '*' || btn == '/') {
+                            int v = 0; int neg=0; char *p=w->input; if(*p=='-'){neg=1;p++;} for(; *p; p++) if(*p>='0'&&*p<='9') v=v*10+(*p-'0'); if(neg)v=-v;
+                            if (w->calc_op && !w->calc_new) {
+                                if (w->calc_op==1) w->calc_v1 += v; else if (w->calc_op==2) w->calc_v1 -= v;
+                                else if (w->calc_op==3) w->calc_v1 *= v; else if (w->calc_op==4 && v!=0) w->calc_v1 /= v;
+                                int cv=w->calc_v1; char tbuf[20];
+                                if(cv<0){ tbuf[0]='-'; itoa(-cv, tbuf+1, 10); } else itoa(cv, tbuf, 10);
+                                strcpy(w->input, tbuf);
+                            } else w->calc_v1 = v;
+                            if(btn=='+')w->calc_op=1; else if(btn=='-')w->calc_op=2; else if(btn=='*')w->calc_op=3; else w->calc_op=4;
+                            w->calc_new=1;
+                        }
+                        else if (btn == '=') {
+                            int v = 0; int neg=0; char *p=w->input; if(*p=='-'){neg=1;p++;} for(; *p; p++) if(*p>='0'&&*p<='9') v=v*10+(*p-'0'); if(neg)v=-v;
+                            if (w->calc_op) {
+                                if (w->calc_op==1) w->calc_v1 += v; else if (w->calc_op==2) w->calc_v1 -= v;
+                                else if (w->calc_op==3) w->calc_v1 *= v; else if (w->calc_op==4 && v!=0) w->calc_v1 /= v;
+                                int cv=w->calc_v1; char tbuf[20];
+                                if(cv<0){ tbuf[0]='-'; itoa(-cv, tbuf+1, 10); } else itoa(cv, tbuf, 10);
+                                strcpy(w->input, tbuf); w->calc_op=0; w->calc_new=1;
+                            }
+                        }
+                        return 0;
+                    }
+                }
+            }
             return 0;
         }
     }
     /* Desktop icons */
     for (int i=0;i<num_icons;i++) { desktop_icon_t *ic=&icons[i];
         if (mx>=ic->x&&mx<ic->x+ICON_W&&my>=ic->y&&my<ic->y+ICON_H) {
-            if (ic->app_id==5){open_window(WIN_AI);return 0;} if(ic->app_id==4) return -4;
+            if (ic->app_id==WIN_AI){open_window(WIN_AI);return 0;} if(ic->app_id==4) return -4;
             if (ic->app_id<=3) open_window(ic->app_id); return 0; } }
     kickoff_open=0; return 0;
 }
@@ -668,7 +855,7 @@ static int handle_click(int mx, int my) {
 static void draw_desktop(void) {
     draw_wallpaper(); draw_icons();
     for (int i=0;i<win_order_count;i++) draw_window(win_order[i]);
-    draw_panel(); draw_kickoff();
+    draw_panel(); draw_kickoff(); draw_context_menu();
     mouse_state_t ms; mouse_get_state(&ms); draw_cursor(ms.x,ms.y);
     vga_flip();
 }
@@ -682,10 +869,42 @@ void desktop_run(void) {
     uint32_t last_draw=0; int needs_redraw=1;
     serial_write("desktop_run: enter loop\n");
 
+    int last_blink = 0;
+    int last_minute = -1;
+    uint32_t sysmon_tick = 0;
+
     while (1) {
         mouse_state_t ms; mouse_get_state(&ms);
+        int l_click = (ms.clicked && (ms.buttons & 1));
+        int r_click = (ms.clicked && (ms.buttons & 2));
+        if (ms.clicked) mouse_clear_events();
+        
+        if (r_click) {
+            /* Right click -> Context menu */
+            if (!ctx_menu_open) {
+                ctx_menu_open = 1; ctx_menu_x = ms.x; ctx_menu_y = ms.y;
+                if (ctx_menu_x + CTX_W > SCRW) ctx_menu_x = SCRW - CTX_W;
+                if (ctx_menu_y + CTX_H > SCRH) ctx_menu_y = SCRH - CTX_H;
+                needs_redraw = 1;
+            }
+        }
+        else if (l_click && ctx_menu_open) {
+             /* Left click might click context menu items or dismiss it */
+            handle_click(ms.x, ms.y);
+            needs_redraw = 1;
+        }
+        else if (l_click) {
+            if (!dragging) {
+                int lr=handle_click(ms.x,ms.y);
+                if (lr==-1) { screen_init(); screen_set_serial_mirror(1); screen_clear();
+                    screen_set_color(VGA_DARK_GREY,VGA_BLACK); screen_print("\n\n   Shutting down...\n");
+                    screen_delay(500); __asm__ volatile("cli; hlt"); while(1); }
+                if (lr==-4) { game_snake(); wp_cached=0; }
+            }
+            needs_redraw=1;
+        }
         if (dragging) {
-            if (mouse_left_pressed()) {
+            if (ms.buttons & 1) { /* Left explicitly held */
                 int nx=ms.x-drag_ox, ny=ms.y-drag_oy;
                 if(nx<0)nx=0; if(ny<0)ny=0;
                 if(nx+windows[drag_win].w>SCRW) nx=SCRW-windows[drag_win].w;
@@ -693,18 +912,7 @@ void desktop_run(void) {
                 windows[drag_win].x=nx; windows[drag_win].y=ny; needs_redraw=1;
             } else dragging=0;
         }
-        if (ms.clicked) {
-            mouse_clear_events();
-            if (!dragging) {
-                int r=handle_click(ms.x,ms.y);
-                if (r==-1) { screen_init(); screen_set_serial_mirror(1); screen_clear();
-                    screen_set_color(VGA_DARK_GREY,VGA_BLACK); screen_print("\n\n   Shutting down...\n");
-                    screen_delay(500); __asm__ volatile("cli; hlt"); while(1); }
-                if (r==-4) { game_snake(); wp_cached=0; }
-                needs_redraw=1;
-            }
-        }
-        if (ms.moved) { mouse_clear_events(); needs_redraw=1; }
+        if (ms.moved) { needs_redraw=1; }
         if (keyboard_has_key()) {
             char c=keyboard_getchar(); needs_redraw=1;
             if (win_focus>=0 && windows[win_focus].active) {
@@ -733,7 +941,27 @@ void desktop_run(void) {
             }
         }
         uint32_t ticks=timer_get_ticks();
-        if (ticks-last_draw>10||needs_redraw) { draw_desktop(); last_draw=ticks; needs_redraw=0; }
+        /* Sysmon history update (every 1 second roughly = 100 ticks at 100Hz) */
+        if (ticks - sysmon_tick > 100) {
+            for (int i=0; i<MAX_WINDOWS; i++) {
+                if (windows[i].active && windows[i].type == WIN_SYSMON) {
+                    windows[i].sysmon_history[windows[i].sysmon_head] = mem_used() / 1024;
+                    windows[i].sysmon_head = (windows[i].sysmon_head + 1) % 60;
+                    needs_redraw = 1;
+                }
+            }
+            sysmon_tick = ticks;
+        }
+
+        /* Cursor blink optimization */
+        int cur_blink = (ticks / 30) % 2;
+        if (cur_blink != last_blink) { last_blink = cur_blink; needs_redraw = 1; }
+
+        /* Clock update optimization */
+        rtc_time_t rtc; rtc_read(&rtc);
+        if (rtc.minute != last_minute) { last_minute = rtc.minute; needs_redraw = 1; }
+
+        if (needs_redraw || dragging) { draw_desktop(); needs_redraw=0; last_draw = ticks; }
         __asm__ volatile("hlt");
     }
 }
