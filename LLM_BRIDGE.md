@@ -1,0 +1,49 @@
+# SwanOS LLM Bridge
+
+The `llm_bridge.py` script serves as the bridge between the SwanOS bare-metal operating system and the external LLM provider, specifically the Groq API. It operates by communicating over named pipes (serial ports exposed by emulators like QEMU or VirtualBox).
+
+## Prerequisites
+
+- Python 3.6+
+- Groq Python library (`pip install groq`)
+- An active Groq API Key
+
+## Usage
+
+```bash
+./llm_bridge.py <serial_in_pipe> <serial_out_pipe> [--log <logfile>]
+```
+
+- `<serial_in_pipe>`: The pipe that SwanOS writes to (and the bridge reads from).
+- `<serial_out_pipe>`: The pipe that SwanOS reads from (and the bridge writes to).
+- `--log`: Optional. A path to write logs to in addition to standard output.
+
+## Bridge Protocol over Serial
+
+The bridge communicates with SwanOS using a simple packet-based protocol framed with ASCII control characters:
+- **`\x01` (SOH - Start of Header)** marks the beginning of a command.
+- **`\x04` (EOT - End of Transmission)** marks the payload's completion.
+
+The first character after `\x01` defines the command type. The rest until `\x04` is the payload.
+
+### Commands Sent from OS -> Bridge
+
+| Command Type | Format | Description |
+|---|---|---|
+| `K` (Key) | `\x01K<api_key>\x04` | Sets the Groq API key to be used for subsequent requests. Initializes the client. |
+| `Q` (Query) | `\x01Q<query>\x04` | Sends a prompt to the LLM. The bridge will evaluate the query using conversational history and respond. |
+| `M` (Model) | `\x01M<model_name>\x04` | Changes the LLM model dynamically (default: `llama-3.3-70b-versatile`). |
+| `S` (System) | `\x01S<prompt>\x04` | Sets a new system prompt for the AI and **resets the conversation history**. |
+| `C` (Clear) | `\x01C\x04` | Clears the current conversation history. Useful to stay within context windows. |
+| `T` (Temp) | `\x01T<float>\x04` | Sets the temperature from `0.0` to `2.0` (default: `0.7`). Effects generation randomness. |
+
+### Responses Forwarded Bridge -> OS
+
+Whenever the bridge finishes evaluating a `Q` query, it sends back the model's text response, terminated by `\x04`, uncompressed.
+If an error occurs (such as an invalid API key or network issue), the bridge sends the error string back to the OS, properly terminated.
+
+## Key Enhancements Added
+
+- **Conversational Memory**: The LLM bridge now retains context from previous interactions up to 10 back-and-forth exchanges.
+- **Dynamic Reconfiguration**: Change the active model, adjust temperature, or swap system prompts on-the-fly without restarting the bridge.
+- **Robust Parsing & Logging**: Instead of basic print statements, a full logging module controls output, easing debugging for VM serial configurations. Added support for robust frame decoding (ignores garbled data up to the `\x01` boundary).
