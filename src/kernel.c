@@ -22,6 +22,7 @@
 #include "process.h"
 #include "syscall.h"
 #include "multiboot.h"
+#include "llm.h"
 
 /* ── Advanced Boot Splash ────────────────────────────────── */
 /* Particle system, neural network nodes, pulsing rings,
@@ -499,6 +500,12 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
     boot_status("In-memory filesystem mounted");
 
     user_init();
+
+    llm_init();
+    if (llm_ready())
+        boot_status("Groq LLM engine initialized (API key loaded)");
+    else
+        boot_status("Groq LLM engine initialized (no API key - use 'setkey')");
 
     /* Clear progress bar and show completion */
     for (int r = 19; r < 22; r++)

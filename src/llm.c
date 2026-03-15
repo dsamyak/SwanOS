@@ -1,29 +1,106 @@
 /* ============================================================
- * SwanOS — LLM Client
- * Sends queries to the host-side bridge via COM1 serial port.
+ * SwanOS — LLM Client (Groq API via Serial Bridge)
+ * Manages API key storage and sends queries to host-side
+ * bridge via COM1 serial port.
+ *
  * Protocol:
- *   OS → Bridge:  \x01Q + query text + \x04 (EOT)
- *   Bridge → OS:  response text + \x04 (EOT)
+ *   OS → Bridge:  \x01K + api_key + \x04        (set API key)
+ *   OS → Bridge:  \x01Q + query text + \x04      (LLM query)
+ *   Bridge → OS:  response text + \x04            (LLM response)
  * ============================================================ */
 
 #include "llm.h"
 #include "serial.h"
 #include "screen.h"
 #include "string.h"
+#include "fs.h"
+
+#define API_KEY_FILE ".apikey"
+#define MAX_KEY_LEN  128
+
+static char api_key[MAX_KEY_LEN];
+static int  key_loaded = 0;
+
+void llm_init(void) {
+    api_key[0] = '\0';
+    key_loaded = 0;
+
+    /* Try to load API key from filesystem */
+    char buf[MAX_KEY_LEN];
+    int r = fs_read(API_KEY_FILE, buf, sizeof(buf) - 1);
+    if (r > 0 && buf[0] != '\0') {
+        /* Strip newlines/spaces */
+        int len = strlen(buf);
+        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == ' ' || buf[len-1] == '\r'))
+            buf[--len] = '\0';
+        if (len > 0) {
+            strcpy(api_key, buf);
+            key_loaded = 1;
+        }
+    }
+
+    /* Send key to bridge if available */
+    if (key_loaded) {
+        llm_send_key();
+    }
+}
+
+void llm_set_api_key(const char *key) {
+    if (!key || key[0] == '\0') return;
+
+    /* Store in memory */
+    strncpy(api_key, key, MAX_KEY_LEN - 1);
+    api_key[MAX_KEY_LEN - 1] = '\0';
+    key_loaded = 1;
+
+    /* Persist to filesystem */
+    fs_write(API_KEY_FILE, api_key);
+
+    /* Send to bridge immediately */
+    llm_send_key();
+}
+
+const char *llm_get_api_key(void) {
+    return api_key;
+}
+
+int llm_ready(void) {
+    return key_loaded && api_key[0] != '\0';
+}
+
+void llm_send_key(void) {
+    if (!key_loaded) return;
+
+    /* Send key command: \x01K<key>\x04 */
+    serial_write_char('\x01');
+    serial_write_char('K');
+    const char *p = api_key;
+    while (*p) {
+        serial_write_char(*p++);
+    }
+    serial_write_char('\x04');
+}
 
 int llm_query(const char *question, char *response, int max_len) {
-    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
-    screen_print("  [connecting to AI...]\n");
-    screen_set_color(VGA_WHITE, VGA_BLACK);
+    if (!llm_ready()) {
+        strcpy(response, "No API key set. Use 'setkey <KEY>' to configure.");
+        return -1;
+    }
 
-    /* Send query over serial (serial_write adds \x01Q prefix + \x04 suffix) */
-    serial_write(question);
+    /* Send query over serial: \x01Q<query>\x04 */
+    serial_write_char('\x01');
+    serial_write_char('Q');
+    const char *p = question;
+    while (*p) {
+        serial_write_char(*p++);
+    }
+    serial_write_char('\x04');
 
     /* Read response (30 second timeout) */
     int len = serial_read_line(response, max_len, 30);
 
     if (len == 0) {
-        strcpy(response, "No response from AI bridge. Is the GUI running?");
+        strcpy(response, "No response from AI bridge. Is llm_bridge.py running?");
         return -1;
     }
 

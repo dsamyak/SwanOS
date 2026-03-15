@@ -590,7 +590,9 @@ static void term_process_cmd(window_t *w) {
     char cc[80]; strcpy(cc,cmd);
     char *arg=cc; while (*arg && *arg!=' ') arg++; if (*arg){*arg='\0';arg++;} while (*arg==' ') arg++;
 
-    if (!strcmp(cc,"help")) { term_add_line(w,"Commands:"); term_add_line(w," ls cat write mkdir rm"); term_add_line(w," calc date mem whoami"); term_add_line(w," ask <question>"); term_add_line(w," clear exit"); }
+    if (!strcmp(cc,"help")) { term_add_line(w,"Commands:"); term_add_line(w," ls cat write mkdir rm"); term_add_line(w," calc date mem whoami"); term_add_line(w," ask <question> setkey <key> aikey"); term_add_line(w," clear exit"); }
+    else if (!strcmp(cc,"aikey")) { if (llm_ready()) term_add_line(w,"API key is configured."); else term_add_line(w,"No API key set. Use 'setkey <KEY>'."); }
+    else if (!strcmp(cc,"setkey")) { if(!arg[0]) term_add_line(w,"Usage: setkey <KEY>"); else { llm_set_api_key(arg); term_add_line(w,"API key saved."); } }
     else if (!strcmp(cc,"clear")) { w->line_count=0; }
     else if (!strcmp(cc,"exit")) { for (int i=0;i<MAX_WINDOWS;i++) if (&windows[i]==w){close_window(i);break;} }
     else if (!strcmp(cc,"ls")) { char l[256]; fs_list(arg[0]?arg:"/",l,sizeof(l)); char *p=l; while (*p){char ln[40];int li=0;while(*p&&*p!='\n'&&li<38)ln[li++]=*p++;ln[li]='\0';if(li>0)term_add_line(w,ln);if(*p=='\n')p++;} }
