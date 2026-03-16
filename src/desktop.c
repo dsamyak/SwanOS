@@ -1,5 +1,5 @@
 /* ============================================================
- * SwanOS — Desktop Environment (KDE Plasma Breeze Dark Style)
+ * SwanOS — Desktop Environment (SwanDE Cygnus Style)
  * Translucent panel, Kickoff menu, Breeze window decorations,
  * gradient wallpaper, 2x fonts, smooth alpha blending.
  * ============================================================ */
@@ -30,7 +30,7 @@
 #define CW         18   /* char width 2x */
 #define CH         16   /* char height 2x */
 
-/* ── KDE Breeze Dark Palette ──────────────────────────────── */
+/* ── Cygnus Dark Palette ──────────────────────────────────── */
 #define B_BG_DARK    0xFF1B1E20   /* Darkest background */
 #define B_BG         0xFF232629   /* Normal background */
 #define B_BG_ALT     0xFF2A2E32   /* Alternate background */
@@ -45,7 +45,7 @@
 #define B_TEXT       0xFFEFF0F1   /* Primary text */
 #define B_TEXT_DIM   0xFF7F8C8D   /* Dimmed text */
 #define B_TEXT_INV   0xFF232629   /* Text on bright bg */
-#define B_ACCENT     0xFF3DAEE9   /* KDE Blue accent */
+#define B_ACCENT     0xFF3DAEE9   /* SwanDE Blue accent */
 #define B_ACCENT2    0xFF2D9AD7   /* Darker accent */
 #define B_GREEN      0xFF27AE60   /* Green */
 #define B_YELLOW     0xFFF39C12   /* Yellow */
@@ -303,7 +303,7 @@ static void draw_panel(void) {
     vga_bb_fill_rounded_rect(dock_x, dock_y, dock_w, PANEL_H, 12, B_PANEL);
     vga_bb_draw_rect_outline(dock_x, dock_y, dock_w, PANEL_H, 0x33FFFFFF);
 
-    /* App launcher button (KDE logo area) */
+    /* App launcher button (SwanDE Cygnus area) */
     mouse_state_t ms; mouse_get_state(&ms);
     int lhover = (ms.x >= dock_x+8 && ms.x < dock_x+54 && ms.y >= dock_y);
     kickoff_x = dock_x + 8; /* Save for kickoff menu opening */
@@ -311,7 +311,7 @@ static void draw_panel(void) {
     if (lhover || kickoff_open)
         vga_bb_fill_rounded_rect(dock_x+8, dock_y+4, 46, PANEL_H-8, 8, B_HOVER);
         
-    /* Simple KDE-like icon: circle with 3 dots */
+    /* Simple SwanDE-like icon: circle with 3 dots */
     vga_bb_fill_circle(dock_x+31, dock_y + PANEL_H/2, 12, B_ACCENT);
     vga_bb_fill_circle(dock_x+31, dock_y + PANEL_H/2, 10, B_BG_DARK);
     /* Three horizontal lines (hamburger) */

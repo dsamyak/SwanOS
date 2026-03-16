@@ -27,7 +27,8 @@ import os
 import time
 import argparse
 import logging
-from groq import Groq
+import typing
+from groq import Groq  # type: ignore
 
 # Default configurations
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
@@ -44,7 +45,7 @@ def main():
     args = parser.parse_args()
     
     # Configure logging
-    log_handlers = [logging.StreamHandler(sys.stdout)]
+    log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if args.log:
         log_handlers.append(logging.FileHandler(args.log))
         
@@ -58,6 +59,10 @@ def main():
     
     pipe_in_path = args.pipe_in
     pipe_out_path = args.pipe_out
+    
+    # Create host data directory for SwanOS persistent storage
+    HOST_DATA_DIR = "host_data"
+    os.makedirs(HOST_DATA_DIR, exist_ok=True)
     
     logger.info("Starting SwanOS Groq Bridge")
     logger.info(f"Listening on {pipe_in_path} (IN) / {pipe_out_path} (OUT)")
@@ -76,7 +81,7 @@ def main():
     current_temperature = DEFAULT_TEMPERATURE
     current_max_tokens = 256
     current_top_p = 1.0
-    conversation_history = []
+    conversation_history: list[dict[str, str]] = []
     
     try:
         with open(pipe_in_path, 'rb', buffering=0) as pipe_in, \
@@ -84,7 +89,7 @@ def main():
                  
             logger.info("Bridge connected. Waiting for commands from SwanOS...")
             
-            buffer = b""
+            buffer: bytes = b""
             while True:
                 chunk = pipe_in.read(1024)
                 if not chunk:
@@ -109,8 +114,8 @@ def main():
                     if len(msg_content) < 1:
                         continue
                         
-                    cmd_type = chr(msg_content[0])
-                    payload = msg_content[1:].decode('utf-8', errors='ignore').strip()
+                    cmd_type = chr(typing.cast(int, msg_content[0]))
+                    payload = typing.cast(bytes, msg_content[1:]).decode('utf-8', errors='ignore').strip()
                     
                     if cmd_type == 'K': # Set API Key
                         logger.info("Received new API key configuration from OS")
@@ -160,6 +165,50 @@ def main():
                         pipe_out.write(status_str.encode('utf-8') + b'\x04')
                         pipe_out.flush()
                         continue
+                        
+                    elif cmd_type == 'V':  # Host Save (V for "Volume Save")
+                        # Format: Vfilename|content
+                        parts = payload.split('|', 1)
+                        if len(parts) == 2:
+                            filename, content = parts
+                            # Prevent directory traversal
+                            safe_name = os.path.basename(filename)
+                            file_path = os.path.join(HOST_DATA_DIR, safe_name)
+                            try:
+                                with open(file_path, 'w', encoding='utf-8') as f:
+                                    f.write(content)
+                                logger.info(f"Host Save: {safe_name}")
+                            except Exception as e:
+                                logger.error(f"Host Save Error: {e}")
+                                
+                    elif cmd_type == 'L':  # Host Load (L for "Load")
+                        # Format: Lfilename (responds with content + \x04)
+                        safe_name = os.path.basename(payload)
+                        file_path = os.path.join(HOST_DATA_DIR, safe_name)
+                        try:
+                            if os.path.exists(file_path):
+                                with open(file_path, 'r', encoding='utf-8') as f:
+                                    content = f.read()
+                                pipe_out.write(content.encode('utf-8') + b'\x04')
+                            else:
+                                pipe_out.write(b'\x04')  # Empty response for not found
+                            logger.info(f"Host Load: {safe_name}")
+                        except Exception as e:
+                            logger.error(f"Host Load Error: {e}")
+                            pipe_out.write(b'\x04')
+                        pipe_out.flush()
+                        continue
+
+                    elif cmd_type == 'A':  # Host Audit (A for "Audit Append")
+                        # Format: Acontent
+                        audit_path = os.path.join(HOST_DATA_DIR, "audit.log")
+                        try:
+                            with open(audit_path, 'a', encoding='utf-8') as f:
+                                timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]")
+                                f.write(f"{timestamp} {payload}\n")
+                            logger.info(f"Host Audit: {payload}")
+                        except Exception as e:
+                            logger.error(f"Host Audit Error: {e}")
                             
                     elif cmd_type == 'Q': # LLM Query
                         logger.info(f"Query: {payload}")
@@ -180,7 +229,7 @@ def main():
                         max_retries = 3
                         for attempt in range(max_retries):
                             try:
-                                completion = client.chat.completions.create(
+                                completion = client.chat.completions.create(  # type: ignore
                                     model=current_model,
                                     messages=messages,
                                     temperature=current_temperature,
@@ -191,12 +240,12 @@ def main():
                                 logger.info(f"Response (len {len(response)})")
                                 
                                 # Update conversation history
-                                conversation_history.append({"role": "user", "content": payload})
-                                conversation_history.append({"role": "assistant", "content": response})
+                                conversation_history.append({"role": "user", "content": payload})  # pyre-ignore
+                                conversation_history.append({"role": "assistant", "content": response})  # pyre-ignore
                                 
                                 # Prune history to avoid context limits
                                 if len(conversation_history) > MAX_HISTORY * 2:
-                                    conversation_history = conversation_history[-(MAX_HISTORY * 2):]
+                                    conversation_history = conversation_history[-(MAX_HISTORY * 2):]  # pyre-ignore
                                 break # Successful query, exit retry loop
                                     
                             except Exception as e:

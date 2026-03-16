@@ -106,3 +106,43 @@ int llm_query(const char *question, char *response, int max_len) {
 
     return len;
 }
+
+/* ── Host Persistent Storage via Bridge ──────────────────── */
+
+void llm_host_save(const char *name, const char *content) {
+    /* Send \x01V<name>|<content>\x04 */
+    serial_write_char('\x01');
+    serial_write_char('V');
+    const char *p = name;
+    while (*p) serial_write_char(*p++);
+    serial_write_char('|');
+    p = content;
+    while (*p) serial_write_char(*p++);
+    serial_write_char('\x04');
+}
+
+int llm_host_load(const char *name, char *buf, int max_len) {
+    /* Send \x01L<name>\x04 */
+    serial_write_char('\x01');
+    serial_write_char('L');
+    const char *p = name;
+    while (*p) serial_write_char(*p++);
+    serial_write_char('\x04');
+
+    /* Read response */
+    int len = serial_read_line(buf, max_len, 5); /* 5 sec timeout */
+    if (len == 0) {
+        buf[0] = '\0';
+        return -1;
+    }
+    return len;
+}
+
+void llm_host_audit(const char *event) {
+    /* Send \x01A<event>\x04 */
+    serial_write_char('\x01');
+    serial_write_char('A');
+    const char *p = event;
+    while (*p) serial_write_char(*p++);
+    serial_write_char('\x04');
+}

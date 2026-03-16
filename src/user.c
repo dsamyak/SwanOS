@@ -8,6 +8,8 @@
 #include "screen.h"
 #include "keyboard.h"
 #include "string.h"
+#include "llm.h"
+#include "fs.h"
 
 static char users[MAX_USERS][MAX_USERNAME];
 static int  user_count = 0;
@@ -17,6 +19,32 @@ void user_init(void) {
     memset(users, 0, sizeof(users));
     user_count = 0;
     current_user = -1;
+
+    /* Ensure /home exists */
+    fs_mkdir("/home");
+
+    char buf[512];
+    int r = llm_host_load("users.txt", buf, sizeof(buf));
+    if (r > 0) {
+        char *p = buf;
+        while (*p && user_count < MAX_USERS) {
+            char *start = p;
+            while (*p && *p != '\n') p++;
+            if (*p == '\n') {
+                *p = '\0';
+                p++;
+            }
+            if (strlen(start) >= 2) {
+                strcpy(users[user_count++], start);
+                
+                /* Create home dir for user */
+                char hdir[64];
+                strcpy(hdir, "/home/");
+                strcat(hdir, start);
+                fs_mkdir(hdir);
+            }
+        }
+    }
 }
 
 int user_register(const char *username) {
@@ -29,7 +57,24 @@ int user_register(const char *username) {
     }
 
     strcpy(users[user_count], username);
-    return user_count++;
+    user_count++;
+
+    /* Save back to host */
+    char buf[512];
+    buf[0] = '\0';
+    for (int i = 0; i < user_count; i++) {
+        strcat(buf, users[i]);
+        strcat(buf, "\n");
+    }
+    llm_host_save("users.txt", buf);
+
+    /* Create home dir */
+    char hdir[64];
+    strcpy(hdir, "/home/");
+    strcat(hdir, username);
+    fs_mkdir(hdir);
+
+    return user_count - 1;
 }
 
 const char *user_current(void) {
@@ -159,6 +204,13 @@ int user_login(void) {
     screen_put_str_at(top + 10, left + 6, "Welcome, ", VGA_GREEN, VGA_BLACK);
     screen_put_str_at(top + 10, left + 15, name, VGA_WHITE, VGA_BLACK);
     screen_put_str_at(top + 10, left + 15 + (int)strlen(name), "!", VGA_GREEN, VGA_BLACK);
+
+    /* Audit Log */
+    char audit_msg[64];
+    strcpy(audit_msg, "User ");
+    strcat(audit_msg, name);
+    strcat(audit_msg, " logged in.");
+    llm_host_audit(audit_msg);
 
     screen_delay(800);
 

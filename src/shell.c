@@ -25,6 +25,41 @@
 
 static char cmd_buf[CMD_BUF];
 static char out_buf[OUT_BUF];
+static char cwd[128] = "/";
+
+/* ── Path Resolution ───────────────────────────────────────── */
+static void resolve_path(const char *input, char *output) {
+    if (input[0] == '/') {
+        strncpy(output, input, 127);
+        output[127] = '\0';
+        return;
+    }
+    
+    char temp[256];
+    strcpy(temp, cwd);
+    
+    if (strcmp(input, "..") == 0) {
+        if (strcmp(temp, "/") != 0) {
+            int len = strlen(temp);
+            while (len > 0 && temp[len - 1] != '/') {
+                len--;
+            }
+            if (len > 1) {
+                temp[len - 1] = '\0';
+            } else {
+                temp[1] = '\0';
+            }
+        }
+    } else if (strcmp(input, ".") != 0 && input[0] != '\0') {
+        if (strcmp(temp, "/") != 0) {
+            strcat(temp, "/");
+        }
+        strcat(temp, input);
+    }
+    
+    strncpy(output, temp, 127);
+    output[127] = '\0';
+}
 
 /* ── Command history ───────────────────────────────────────── */
 #define HIST_SIZE 16
@@ -72,7 +107,10 @@ static int calc_eval(const char *expr) {
 
 /* ── Hexdump ───────────────────────────────────────────────── */
 static void cmd_hexdump(const char *filename) {
-    int r = fs_read(filename, out_buf, OUT_BUF);
+    char abs_path[128];
+    resolve_path(filename, abs_path);
+
+    int r = fs_read(abs_path, out_buf, OUT_BUF);
     if (r < 0) {
         screen_set_color(VGA_RED, VGA_BLACK);
         screen_print("  ");
@@ -147,6 +185,10 @@ static void print_prompt(void) {
     screen_putchar(' ');
     screen_set_color(VGA_GREEN, VGA_BLACK);
     screen_print(user_current());
+    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+    screen_print("@");
+    screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    screen_print(cwd);
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
     screen_print(" ");
     screen_putchar((char)16);   /* ► */
@@ -271,6 +313,7 @@ static void cmd_help(void) {
     print_help_entry("ask <question>", "Ask the AI assistant");
 
     print_help_section("FILES", VGA_YELLOW);
+    print_help_entry("cd <dir>", "Change directory");
     print_help_entry("ls [path]", "List files");
     print_help_entry("cat <file>", "Read file");
     print_help_entry("write <f> <txt>", "Write file");
@@ -407,8 +450,41 @@ static int execute_command(char *input) {
     }
 
     /* ── Files ── */
+    if (strcmp(cmd, "cd") == 0) {
+        if (arg[0] == '\0') {
+            /* cd home if no arg */
+            strcpy(cwd, "/home/");
+            strcat(cwd, user_current());
+            return 0;
+        }
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+        if (fs_exists(abs_path)) {
+            /* Simple check: if fs_list succeeds, it's a dir */
+            int r = fs_list(abs_path, out_buf, 10);
+            if (r >= 0) {
+                strcpy(cwd, abs_path);
+            } else {
+                screen_set_color(VGA_RED, VGA_BLACK);
+                screen_print("   ");
+                screen_putchar((char)254);
+                screen_print(" Not a directory.\n");
+                screen_set_color(VGA_WHITE, VGA_BLACK);
+            }
+        } else {
+            screen_set_color(VGA_RED, VGA_BLACK);
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Directory not found.\n");
+            screen_set_color(VGA_WHITE, VGA_BLACK);
+        }
+        return 0;
+    }
+
     if (strcmp(cmd, "ls") == 0) {
-        fs_list(arg[0] ? arg : "/", out_buf, OUT_BUF);
+        char abs_path[128];
+        resolve_path(arg[0] ? arg : ".", abs_path);
+        fs_list(abs_path, out_buf, OUT_BUF);
         screen_print(out_buf);
         return 0;
     }
@@ -422,7 +498,9 @@ static int execute_command(char *input) {
             screen_set_color(VGA_WHITE, VGA_BLACK);
             return 0;
         }
-        int r = fs_read(arg, out_buf, OUT_BUF);
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+        int r = fs_read(abs_path, out_buf, OUT_BUF);
         if (r < 0) screen_set_color(VGA_RED, VGA_BLACK);
         screen_print("  ");
         screen_print(out_buf);
@@ -454,7 +532,10 @@ static int execute_command(char *input) {
             return 0;
         }
 
-        if (fs_write(arg, content) == 0) {
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+
+        if (fs_write(abs_path, content) == 0) {
             screen_set_color(VGA_GREEN, VGA_BLACK);
             screen_print("   ");
             screen_putchar((char)254);
@@ -492,7 +573,10 @@ static int execute_command(char *input) {
             screen_set_color(VGA_WHITE, VGA_BLACK);
             return 0;
         }
-        if (fs_append(arg, content) == 0) {
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+        
+        if (fs_append(abs_path, content) == 0) {
             screen_set_color(VGA_GREEN, VGA_BLACK);
             screen_print("   ");
             screen_putchar((char)254);
@@ -530,7 +614,11 @@ static int execute_command(char *input) {
             screen_set_color(VGA_WHITE, VGA_BLACK);
             return 0;
         }
-        if (fs_copy(arg, dst) == 0) {
+        char abs_src[128], abs_dst[128];
+        resolve_path(arg, abs_src);
+        resolve_path(dst, abs_dst);
+
+        if (fs_copy(abs_src, abs_dst) == 0) {
             screen_set_color(VGA_GREEN, VGA_BLACK);
             screen_print("   ");
             screen_putchar((char)254);
@@ -570,7 +658,14 @@ static int execute_command(char *input) {
             screen_set_color(VGA_WHITE, VGA_BLACK);
             return 0;
         }
-        if (fs_rename(arg, newname) == 0) {
+        
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+        
+        /* Note: mv only renames inside current directory for now, 
+           because fs.c rename doesn't support changing parents yet.
+           We pass abs_path as source, and base newname as destination. */
+        if (fs_rename(abs_path, newname) == 0) {
             screen_set_color(VGA_GREEN, VGA_BLACK);
             screen_print("   ");
             screen_putchar((char)254);
@@ -596,7 +691,10 @@ static int execute_command(char *input) {
             screen_set_color(VGA_WHITE, VGA_BLACK);
             return 0;
         }
-        if (fs_mkdir(arg) == 0) {
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+
+        if (fs_mkdir(abs_path) == 0) {
             screen_set_color(VGA_GREEN, VGA_BLACK);
             screen_print("   ");
             screen_putchar((char)254);
@@ -622,7 +720,10 @@ static int execute_command(char *input) {
             screen_set_color(VGA_WHITE, VGA_BLACK);
             return 0;
         }
-        int r = fs_delete(arg);
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+
+        int r = fs_delete(abs_path);
         if (r == 0) {
             screen_set_color(VGA_GREEN, VGA_BLACK);
             screen_print("   ");
@@ -1076,6 +1177,10 @@ int shell_run(void) {
     screen_print("   ");
     screen_putchar((char)6);
     screen_print(" SwanOS CLI");
+    /* Set current directory to home directory on entry */
+    strcpy(cwd, "/home/");
+    strcat(cwd, user_current());
+    
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
     screen_print("  ");
     screen_putchar((char)250);

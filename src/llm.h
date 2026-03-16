@@ -19,4 +19,9 @@ void llm_send_key(void);
 /* Send a query to the LLM via serial bridge and get the response */
 int llm_query(const char *question, char *response, int max_len);
 
+/* Host Persistent Storage over Bridge */
+void llm_host_save(const char *name, const char *content);
+int  llm_host_load(const char *name, char *buf, int max_len);
+void llm_host_audit(const char *event);
+
 #endif
