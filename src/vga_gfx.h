@@ -55,6 +55,7 @@ void vga_bb_fill_rounded_rect(int x, int y, int w, int h, int r, uint32_t color)
 void vga_bb_fill_rounded_rect_gradient(int x, int y, int w, int h, int r,
                                        uint32_t color_top, uint32_t color_bot);
 void vga_bb_fill_circle(int cx, int cy, int r, uint32_t color);
+void vga_bb_draw_circle(int cx, int cy, int r, uint32_t color);
 void vga_bb_fill_circle_alpha(int cx, int cy, int r, uint32_t color);
 
 /* ── Backbuffer text (1x — 8x8) ──────────────────────────── */

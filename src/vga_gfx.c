@@ -353,6 +353,19 @@ void vga_bb_fill_circle(int cx, int cy, int r, uint32_t color) {
     }
 }
 
+/* ── Backbuffer circle outline (Bresenham) ────────────────── */
+void vga_bb_draw_circle(int cx, int cy, int r, uint32_t color) {
+    int x = 0, y = r, d = 3 - 2 * r;
+    while (x <= y) {
+        vga_bb_putpixel(cx+x,cy+y,color); vga_bb_putpixel(cx-x,cy+y,color);
+        vga_bb_putpixel(cx+x,cy-y,color); vga_bb_putpixel(cx-x,cy-y,color);
+        vga_bb_putpixel(cx+y,cy+x,color); vga_bb_putpixel(cx-y,cy+x,color);
+        vga_bb_putpixel(cx+y,cy-x,color); vga_bb_putpixel(cx-y,cy-x,color);
+        if (d < 0) d += 4*x+6; else { d += 4*(x-y)+10; y--; }
+        x++;
+    }
+}
+
 /* Alpha blended backbuffer circle */
 void vga_bb_fill_circle_alpha(int cx, int cy, int r, uint32_t color) {
     uint32_t a = (color >> 24) & 0xFF;

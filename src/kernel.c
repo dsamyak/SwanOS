@@ -23,6 +23,7 @@
 #include "syscall.h"
 #include "multiboot.h"
 #include "llm.h"
+#include "network.h"
 
 /* ── Advanced Boot Splash ────────────────────────────────── */
 /* Particle system, neural network nodes, pulsing rings,
@@ -276,7 +277,7 @@ static void gfx_boot_splash(void) {
     vga_clear(0);
     int cx = GFX_W / 2;
     int cy = GFX_H / 2;
-    const char *msg = "SwanOS v3.0 - Booting AI Microkernel...";
+    const char *msg = "SwanOS v3.0 - Booting AI Microkernel";
     vga_draw_string_3x(cx - (strlen(msg)*26/2), cy, msg, 0xFFFFFFFF);
     screen_delay(500);
     screen_set_serial_mirror(1);
@@ -448,7 +449,7 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
     screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     screen_print("OS");
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
-    screen_print(" v2.0  ");
+    screen_print(" v3.0  ");
     screen_putchar((char)250); /* · */
     screen_print("  LLM-Powered Operating System\n");
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
@@ -506,6 +507,12 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
         boot_status("Groq LLM engine initialized (API key loaded)");
     else
         boot_status("Groq LLM engine initialized (no API key - use 'setkey')");
+
+    net_init();
+    if (net_get_status()->detected)
+        boot_status("Network interface detected");
+    else
+        boot_status("No network adapter found");
 
     /* Clear progress bar and show completion */
     for (int r = 19; r < 22; r++)
