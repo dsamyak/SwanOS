@@ -26,7 +26,7 @@
 /* ── Layout ───────────────────────────────────────────────── */
 #define SCRW       GFX_W
 #define SCRH       GFX_H
-#define PANEL_H    44
+#define PANEL_H    60
 #define DESK_H     (SCRH - PANEL_H)
 #define TITLEBAR_H 32
 #define CW         18   /* char width 2x */
@@ -294,9 +294,20 @@ static void draw_icons(void) {
 static int dock_x = 0, dock_w = 0, dock_y = 0;
 static int kickoff_x = 0;
 
-/* ── Panel (Floating Dock) — Enhanced ──────────── */
+/* ── Panel (Floating Neon Aurora Dock) ──────────── */
 static int quick_settings_open = 0;  /* Quick settings popup state */
 static int notification_count = 3;   /* Simulated notification count */
+
+/* Tray memory sparkline (20 samples, 0-100% range) */
+static int tray_mem_history[20];
+static int tray_mem_head = 0;
+static uint32_t tray_mem_tick = 0;
+
+/* ── Rearrange Mode ──────────────────────────────── */
+static int rearrange_mode = 0;       /* 1 = tray items can be dragged */
+static int tray_drag_active = 0;     /* currently dragging a tray slot */
+static int tray_drag_slot = -1;      /* which slot is being dragged */
+static int tray_slot_order[5] = {0,1,2,3,4}; /* MEM, NET, VOL, BAT, BELL */
 
 static void draw_panel(void) {
     /* Calculate required dock width */
@@ -304,219 +315,395 @@ static void draw_panel(void) {
     for (int i = 0; i < win_order_count; i++) {
         int wi = win_order[i];
         if (!windows[wi].active) continue;
-        int bw = (int)strlen(windows[wi].title) * CW + 20;
+        int bw = (int)strlen(windows[wi].title) * CW + 28;
         if (bw > 200) bw = 200;
         wins_w += bw + 8;
     }
-    
-    dock_w = 56 + 16 + wins_w + 420 /* wider tray for date */;
-    if (dock_w > SCRW - 40) dock_w = SCRW - 40;
+
+    dock_w = 64 + 16 + wins_w + 520;
+    if (dock_w > SCRW - 20) dock_w = SCRW - 20;
     dock_x = (SCRW - dock_w) / 2;
-    dock_y = SCRH - PANEL_H - 12;
+    dock_y = SCRH - PANEL_H - 16;  /* Extra floating gap */
 
-    /* Glassmorphism dock via C++ theme engine */
-    ui_soft_shadow(dock_x, dock_y, dock_w, PANEL_H, 14, 3);
-    ui_glass_panel(dock_x, dock_y, dock_w, PANEL_H, 12, B_PANEL, S_GLASS_BORDER);
+    /* ── Dock Background: frosted panel + neon border ── */
+    ui_soft_shadow(dock_x, dock_y, dock_w, PANEL_H, 18, 5);
+    ui_frosted_panel(dock_x, dock_y, dock_w, PANEL_H, 16, B_PANEL, S_GLASS_BORDER);
+    ui_neon_border(dock_x, dock_y, dock_w, PANEL_H, 16, S_NEON_CYAN);
 
-    /* ── App Launcher Button ── */
     mouse_state_t ms; mouse_get_state(&ms);
     const int msx = ms.x, msy = ms.y;
-    int lhover = (msx >= dock_x+6 && msx < dock_x+56 && msy >= dock_y);
-    kickoff_x = dock_x + 8;
-    
-    /* Gradient launcher pill */
+
+    /* ════════════════════════════════════════════════════════
+     *  Launcher Pill Segment
+     * ════════════════════════════════════════════════════════ */
+    kickoff_x = dock_x + 6;
+    int launcher_w = 56;
+    int lhover = (msx >= dock_x+4 && msx < dock_x+4+launcher_w && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+    ui_pill_segment(dock_x+4, dock_y+4, launcher_w, PANEL_H-8, 14,
+                    lhover || kickoff_open ? 0x30FFFFFF : 0x14FFFFFF,
+                    0x20FFFFFF, lhover || kickoff_open);
+
+    /* Swan monogram with neon glow */
+    int swan_cx = dock_x+4+launcher_w/2, swan_cy = dock_y+PANEL_H/2;
     if (lhover || kickoff_open) {
-        vga_bb_fill_rounded_rect(dock_x+6, dock_y+4, 50, PANEL_H-8, 10, S_ACCENT2);
-        vga_bb_fill_rounded_rect(dock_x+7, dock_y+5, 48, PANEL_H-10, 9, B_HOVER);
+        vga_bb_fill_circle_alpha(swan_cx, swan_cy, 18, S_GLOW_PULSE);
+        vga_bb_fill_circle_alpha(swan_cx, swan_cy, 14, S_ACCENT_GLOW);
     }
-    /* Swan icon — circle with wing shape */
-    vga_bb_fill_circle(dock_x+31, dock_y+PANEL_H/2, 13, S_ACCENT);
-    vga_bb_fill_circle(dock_x+31, dock_y+PANEL_H/2, 11, S_BG_DEEP);
-    /* S letter for Swan */
-    vga_bb_draw_string_2x(dock_x+24, dock_y+PANEL_H/2-7, "S", S_ACCENT, 0x00000000);
+    vga_bb_fill_circle(swan_cx, swan_cy, 13, S_NEON_CYAN);
+    vga_bb_fill_circle(swan_cx, swan_cy, 11, S_BG_DEEP);
+    vga_bb_draw_string_2x(swan_cx-7+1, swan_cy-7+1, "S", 0x60000000, 0x00000000);
+    vga_bb_draw_string_2x(swan_cx-7, swan_cy-7, "S", S_NEON_CYAN, 0x00000000);
+    vga_bb_fill_circle(swan_cx+8, swan_cy-8, 2, 0x60FFFFFF);
 
-    /* ── Task Buttons ── */
-    int bx = dock_x + 66;
-    vga_bb_draw_vline(bx-6, dock_y+10, PANEL_H-20, B_SEPARATOR);
+    /* ════════════════════════════════════════════════════════
+     *  Task Buttons Pill Segment
+     * ════════════════════════════════════════════════════════ */
+    int tasks_x = dock_x + 4 + launcher_w + 6;
+    int tasks_end = dock_x + dock_w - 500;
+    int tasks_w = tasks_end - tasks_x;
+    if (tasks_w < 60) tasks_w = 60;
+    if (win_order_count > 0)
+        ui_pill_segment(tasks_x, dock_y+4, tasks_w, PANEL_H-8, 12,
+                        0x10FFFFFF, 0x15FFFFFF, 0);
 
-    for (int i = 0; i < win_order_count && bx < dock_x + dock_w - 300; i++) {
+    int bx = tasks_x + 8;
+    for (int i = 0; i < win_order_count && bx < tasks_x + tasks_w - 20; i++) {
         int wi = win_order[i];
         if (!windows[wi].active) continue;
         int focused = (wi == win_focus);
-        int bw = (int)strlen(windows[wi].title) * CW + 24;
+        int bw = (int)strlen(windows[wi].title) * CW + 32;
         if (bw > 200) bw = 200;
         int thover = (msx >= bx && msx < bx+bw && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+
         if (focused) {
-            vga_bb_fill_rounded_rect(bx, dock_y+4, bw, PANEL_H-8, 8, S_BG_HOVER);
-            /* Accent pill indicator — teal */
-            vga_bb_fill_rounded_rect(bx+bw/2-10, dock_y+PANEL_H-5, 20, 3, 1, S_ACCENT);
-            /* Colored dot for window type */
-            uint32_t dot_c = S_ACCENT;
-            if (windows[wi].type == WIN_AI) dot_c = S_PURPLE;
-            else if (windows[wi].type == WIN_TERM) dot_c = S_GREEN;
-            else if (windows[wi].type == WIN_FILES) dot_c = S_YELLOW;
-            else if (windows[wi].type == WIN_NETWORK) dot_c = S_BLUE;
-            else if (windows[wi].type == WIN_BROWSER) dot_c = S_ORANGE;
-            vga_bb_fill_circle(bx+10, dock_y+PANEL_H/2, 4, dot_c);
+            vga_bb_fill_rounded_rect(bx, dock_y+6, bw, PANEL_H-12, 10, S_BG_HOVER);
+            vga_bb_fill_rounded_rect_gradient(bx+4, dock_y+PANEL_H-8, bw-8, 3, 1, S_NEON_CYAN, S_NEON_PURPLE);
+            vga_bb_draw_hline(bx+10, dock_y+7, bw-20, 0x10FFFFFF);
         } else if (thover) {
-            vga_bb_fill_rounded_rect(bx, dock_y+4, bw, PANEL_H-8, 8, S_BG_ALT);
+            vga_bb_fill_rounded_rect(bx, dock_y+6, bw, PANEL_H-12, 10, S_BG_ALT);
         }
-        vga_bb_draw_string_2x(bx+19, dock_y+15, windows[wi].title, 0x60000000, 0x00000000);
-        vga_bb_draw_string_2x(bx+18, dock_y+14, windows[wi].title, focused ? B_TEXT : B_TEXT_DIM, 0x00000000);
+
+        /* Colored mini-icon dot with neon glow */
+        uint32_t dot_c = S_ACCENT;
+        if (windows[wi].type == WIN_AI) dot_c = S_NEON_PURPLE;
+        else if (windows[wi].type == WIN_TERM) dot_c = S_GREEN;
+        else if (windows[wi].type == WIN_FILES) dot_c = S_YELLOW;
+        else if (windows[wi].type == WIN_NETWORK) dot_c = S_BLUE;
+        else if (windows[wi].type == WIN_BROWSER) dot_c = S_ORANGE;
+        else if (windows[wi].type == WIN_CALC) dot_c = S_PINK;
+        else if (windows[wi].type == WIN_SYSMON) dot_c = S_RED;
+        else if (windows[wi].type == WIN_STORE) dot_c = S_GREEN;
+
+        if (focused)
+            vga_bb_fill_circle_alpha(bx+12, dock_y+PANEL_H/2, 8, (0x30 << 24) | (dot_c & 0x00FFFFFF));
+        vga_bb_fill_circle(bx+12, dock_y+PANEL_H/2, 5, dot_c);
+        vga_bb_fill_circle(bx+12, dock_y+PANEL_H/2, 3, S_BG_DEEP);
+        vga_bb_fill_circle(bx+12, dock_y+PANEL_H/2, 2, dot_c);
+
+        /* Active app indicator dot below button */
+        vga_bb_fill_circle(bx + bw/2, dock_y+PANEL_H-5, 2, dot_c);
+        if (focused) {
+            vga_bb_fill_circle_alpha(bx + bw/2, dock_y+PANEL_H-5, 4, (0x30 << 24) | (dot_c & 0x00FFFFFF));
+        }
+
+        vga_bb_draw_string_2x(bx+23, dock_y+PANEL_H/2-8, windows[wi].title, 0x40000000, 0x00000000);
+        vga_bb_draw_string_2x(bx+22, dock_y+PANEL_H/2-9, windows[wi].title, focused ? B_TEXT : B_TEXT_DIM, 0x00000000);
         bx += bw + 6;
     }
 
-    /* ── System Tray ── */
-    int tx = dock_x + dock_w - 380;
-    vga_bb_draw_vline(tx, dock_y+10, PANEL_H-20, B_SEPARATOR);
+    /* ════════════════════════════════════════════════════════
+     *  System Tray Pill Segment
+     * ════════════════════════════════════════════════════════ */
+    int tray_right = dock_x + dock_w - 140;
+    int tray_start = tray_right - 360;
+    int tray_w = tray_right - tray_start;
+    ui_pill_segment(tray_start, dock_y+4, tray_w, PANEL_H-8, 12,
+                    0x10FFFFFF, 0x15FFFFFF, 0);
 
-    /* Uptime indicator */
-    uint32_t up_secs = timer_get_seconds();
-    char ut[20]; char tmp[8];
-    itoa(up_secs / 60, tmp, 10);
-    strcpy(ut, tmp); strcat(ut, "m");
-    vga_bb_draw_string(tx+8, dock_y+PANEL_H/2-3, ut, B_TEXT_DIM, 0x00000000);
+    /* Rearrange mode indicator */
+    if (rearrange_mode) {
+        vga_bb_fill_rounded_rect(tray_start+2, dock_y+4, tray_w-4, 2, 1, S_NEON_MAGENTA);
+        vga_bb_fill_rounded_rect(tray_start+2, dock_y+PANEL_H-6, tray_w-4, 2, 1, S_NEON_MAGENTA);
+    }
 
-    /* Memory */
-    int mem_ix = tx + 48;
-    itoa(mem_used()/1024, tmp, 10);
-    char mb[16]; strcpy(mb, tmp); strcat(mb, "K");
-    vga_bb_draw_string(mem_ix, dock_y+PANEL_H/2-3, mb, B_TEXT_DIM, 0x00000000);
+    int tx = tray_start + 8;
 
-    /* Dot separator */
-    vga_bb_fill_circle(mem_ix+40, dock_y+PANEL_H/2, 2, B_SEPARATOR);
-
-    /* ── Network icon ── */
-    int net_ix = mem_ix + 52;
-    int net_hover = (msx >= net_ix-6 && msx < net_ix+22 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
-    if (net_hover) vga_bb_fill_rounded_rect(net_ix-6, dock_y+6, 28, PANEL_H-12, 6, B_HOVER);
+    /* ── 1. Memory sparkline + text ── */
     {
+        int mg_w = 48, mg_h = 22;
+        int mem_grp_w = mg_w + 46;
+        int mem_hover = (msx >= tx-4 && msx < tx+mem_grp_w+4 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+        ui_tray_icon_bg(tx-4, dock_y+8, mem_grp_w+8, PANEL_H-16, mem_hover);
+        if (rearrange_mode)
+            ui_drag_handle(tx-4, dock_y+8, 8, PANEL_H-16, S_NEON_MAGENTA);
+
+        ui_mini_graph(tx+4, dock_y+10, mg_w, mg_h, tray_mem_history, 20, S_GREEN, S_RED);
+
+        int mem_pct = 0;
+        int mt = mem_total();
+        if (mt > 0) mem_pct = (mem_used() * 100) / mt;
+        char mp[8]; itoa(mem_pct, mp, 10); strcat(mp, "%");
+        vga_bb_draw_string_2x(tx+mg_w+8, dock_y+12, mp, mem_pct > 80 ? S_RED : (mem_pct > 50 ? S_YELLOW : S_GREEN), 0x00000000);
+        vga_bb_draw_string(tx+mg_w+8, dock_y+32, "MEM", S_TEXT_DIM, 0x00000000);
+
+        if (mem_hover && !rearrange_mode) {
+            char mtip[32]; char tmp2[8];
+            strcpy(mtip, ""); itoa(mem_used()/1024, tmp2, 10); strcat(mtip, tmp2);
+            strcat(mtip, "K / "); itoa(mt/1024, tmp2, 10); strcat(mtip, tmp2); strcat(mtip, "K");
+            ui_tooltip(tx + mem_grp_w/2, dock_y, mtip, S_BG_LIGHT, S_TEXT);
+        }
+        tx += mem_grp_w + 10;
+    }
+
+    ui_divider_v(tx-3, dock_y+12, PANEL_H-24, 0x30FFFFFF);
+    tx += 5;
+
+    /* ── 2. Network icon with signal bars ── */
+    {
+        int net_w = 36;
+        int net_hover = (msx >= tx-4 && msx < tx+net_w+4 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+        ui_tray_icon_bg(tx-4, dock_y+8, net_w+8, PANEL_H-16, net_hover);
+        if (rearrange_mode)
+            ui_drag_handle(tx-4, dock_y+8, 8, PANEL_H-16, S_NEON_MAGENTA);
+
         net_status_t *ns = net_get_status();
         uint32_t nc = ns->connected ? S_GREEN : S_RED;
-        vga_bb_draw_circle(net_ix+8, dock_y+PANEL_H/2+6, 10, nc);
-        vga_bb_draw_circle(net_ix+8, dock_y+PANEL_H/2+6, 7, nc);
-        vga_bb_draw_circle(net_ix+8, dock_y+PANEL_H/2+6, 4, nc);
-        vga_bb_fill_circle(net_ix+8, dock_y+PANEL_H/2+6, 2, nc);
-        vga_bb_fill_rect(net_ix-2, dock_y+PANEL_H/2+7, 20, 10, B_PANEL);
-        /* Tooltip on hover */
-        if (net_hover) {
-            const char *tip = ns->connected ? "Connected" : "Disconnected";
-            int tw = (int)strlen(tip) * CW;
-            vga_bb_fill_rounded_rect(net_ix-tw/2+8, dock_y-24, tw+12, 20, 6, S_BG_LIGHT);
-            vga_bb_draw_string_2x(net_ix-tw/2+14, dock_y-22, tip, B_TEXT, 0x00000000);
+
+        int bar_x = tx + 2;
+        int bar_base = dock_y + PANEL_H/2 + 10;
+        int bar_heights[] = {8, 14, 20};
+        int bar_widths = 6;
+        int n_bars = ns->connected ? 3 : 1;
+        for (int b = 0; b < 3; b++) {
+            uint32_t bc = (b < n_bars) ? nc : S_BG_LIGHT;
+            vga_bb_fill_rounded_rect(bar_x + b*(bar_widths+3), bar_base - bar_heights[b],
+                                     bar_widths, bar_heights[b], 2, bc);
         }
+
+        const char *ntype = ns->connected ? "LAN" : "OFF";
+        ui_badge(tx, dock_y+PANEL_H/2 + 12, ntype, ns->connected ? S_ACCENT2 : S_BG_LIGHT, ns->connected ? S_BG_DEEP : S_TEXT_DIM);
+
+        if (net_hover && !rearrange_mode) {
+            const char *tip = ns->connected ? "Connected" : "Disconnected";
+            ui_tooltip(tx + net_w/2, dock_y, tip, S_BG_LIGHT, S_TEXT);
+        }
+        tx += net_w + 10;
     }
 
-    /* ── Volume icon ── */
-    int vol_ix = net_ix + 34;
-    int vol_hover = (msx >= vol_ix-4 && msx < vol_ix+22 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
-    if (vol_hover) vga_bb_fill_rounded_rect(vol_ix-4, dock_y+6, 26, PANEL_H-12, 6, B_HOVER);
-    vga_bb_fill_rect(vol_ix, dock_y+PANEL_H/2-4, 5, 8, S_TEXT);
-    vga_bb_fill_rect(vol_ix+5, dock_y+PANEL_H/2-6, 4, 12, S_TEXT);
-    vga_bb_draw_circle(vol_ix+11, dock_y+PANEL_H/2, 4, S_TEXT_DIM);
-    vga_bb_draw_circle(vol_ix+11, dock_y+PANEL_H/2, 7, S_TEXT_DIM);
-    if (vol_hover) {
-        vga_bb_fill_rounded_rect(vol_ix-10, dock_y-24, 50, 20, 6, S_BG_LIGHT);
-        vga_bb_draw_string_2x(vol_ix-4, dock_y-22, "75%", B_TEXT, 0x00000000);
+    ui_divider_v(tx-3, dock_y+12, PANEL_H-24, 0x30FFFFFF);
+    tx += 5;
+
+    /* ── 3. Volume icon ── */
+    {
+        int vol_w = 30;
+        int vol_hover = (msx >= tx-4 && msx < tx+vol_w+4 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+        ui_tray_icon_bg(tx-4, dock_y+8, vol_w+8, PANEL_H-16, vol_hover);
+        if (rearrange_mode)
+            ui_drag_handle(tx-4, dock_y+8, 8, PANEL_H-16, S_NEON_MAGENTA);
+
+        int vy = dock_y + PANEL_H/2;
+        vga_bb_fill_rect(tx+2, vy-5, 6, 10, S_TEXT);
+        vga_bb_fill_rect(tx+8, vy-8, 5, 16, S_TEXT);
+        vga_bb_draw_circle(tx+16, vy, 5, S_NEON_CYAN);
+        vga_bb_draw_circle(tx+16, vy, 9, S_TEXT_DIM);
+        vga_bb_draw_circle(tx+16, vy, 13, 0x40FFFFFF);
+        vga_bb_fill_rect(tx, vy-14, 16, 28, 0x00000000);
+        vga_bb_fill_rect(tx+2, vy-5, 6, 10, S_TEXT);
+        vga_bb_fill_rect(tx+8, vy-8, 5, 16, S_TEXT);
+
+        ui_badge(tx+2, dock_y+PANEL_H/2 + 12, "75%", S_ACCENT2, S_BG_DEEP);
+
+        if (vol_hover && !rearrange_mode)
+            ui_tooltip(tx + vol_w/2, dock_y, "Volume 75%", S_BG_LIGHT, S_TEXT);
+        tx += vol_w + 10;
     }
 
-    /* ── Battery icon ── */
-    int bat_ix = vol_ix + 32;
-    int bat_hover = (msx >= bat_ix-4 && msx < bat_ix+28 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
-    if (bat_hover) vga_bb_fill_rounded_rect(bat_ix-4, dock_y+6, 32, PANEL_H-12, 6, B_HOVER);
-    vga_bb_draw_rect_outline(bat_ix, dock_y+PANEL_H/2-6, 20, 12, S_TEXT);
-    vga_bb_fill_rect(bat_ix+20, dock_y+PANEL_H/2-3, 3, 6, S_TEXT);
-    vga_bb_fill_rect(bat_ix+2, dock_y+PANEL_H/2-4, 16, 8, S_GREEN);
-    /* Lightning bolt for charging */
-    vga_bb_draw_vline(bat_ix+10, dock_y+PANEL_H/2-4, 4, S_BG_DEEP);
-    vga_bb_draw_vline(bat_ix+9, dock_y+PANEL_H/2, 4, S_BG_DEEP);
-    if (bat_hover) {
-        vga_bb_fill_rounded_rect(bat_ix-16, dock_y-24, 72, 20, 6, S_BG_LIGHT);
-        vga_bb_draw_string_2x(bat_ix-10, dock_y-22, "AC Power", B_TEXT, 0x00000000);
+    /* ── 4. Battery ── */
+    {
+        int bat_w = 36;
+        int bat_hover = (msx >= tx-4 && msx < tx+bat_w+4 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+        ui_tray_icon_bg(tx-4, dock_y+8, bat_w+8, PANEL_H-16, bat_hover);
+        if (rearrange_mode)
+            ui_drag_handle(tx-4, dock_y+8, 8, PANEL_H-16, S_NEON_MAGENTA);
+
+        int by = dock_y + PANEL_H/2 - 2;
+        vga_bb_fill_rounded_rect(tx+1, by-8, 26, 16, 3, S_BG_DEEP);
+        vga_bb_draw_rect_outline(tx+1, by-8, 26, 16, S_TEXT);
+        vga_bb_fill_rect(tx+27, by-4, 4, 8, S_TEXT);
+        vga_bb_fill_rounded_rect(tx+27, by-3, 4, 6, 2, S_TEXT);
+        vga_bb_fill_rounded_rect_gradient(tx+3, by-6, 22, 12, 2, S_GREEN, S_YELLOW);
+        vga_bb_fill_rect(tx+12, by-5, 3, 4, S_BG_DEEP);
+        vga_bb_fill_rect(tx+10, by-1, 3, 4, S_BG_DEEP);
+        vga_bb_fill_rect(tx+13, by-3, 2, 2, S_BG_DEEP);
+        ui_badge(tx+4, dock_y+PANEL_H/2 + 12, "AC", S_GREEN, S_BG_DEEP);
+
+        if (bat_hover && !rearrange_mode)
+            ui_tooltip(tx + bat_w/2, dock_y, "AC Power 100%", S_BG_LIGHT, S_TEXT);
+        tx += bat_w + 10;
     }
 
-    /* ── Notification bell with badge ── */
-    int bell_ix = bat_ix + 38;
-    int bell_hover = (msx >= bell_ix-4 && msx < bell_ix+22 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
-    if (bell_hover) vga_bb_fill_rounded_rect(bell_ix-4, dock_y+6, 26, PANEL_H-12, 6, B_HOVER);
-    /* Bell shape */
-    vga_bb_fill_circle(bell_ix+8, dock_y+PANEL_H/2-3, 7, S_YELLOW);
-    vga_bb_fill_rect(bell_ix+1, dock_y+PANEL_H/2, 14, 6, S_YELLOW);
-    vga_bb_fill_rect(bell_ix-1, dock_y+PANEL_H/2+6, 18, 2, S_YELLOW);
-    vga_bb_fill_circle(bell_ix+8, dock_y+PANEL_H/2+10, 2, S_YELLOW);
-    /* Notification count badge */
-    if (notification_count > 0) {
-        vga_bb_fill_circle(bell_ix+16, dock_y+PANEL_H/2-8, 7, S_RED);
-        char nc_str[4]; itoa(notification_count, nc_str, 10);
-        vga_bb_draw_string(bell_ix+13, dock_y+PANEL_H/2-12, nc_str, 0xFFFFFFFF, 0x00000000);
-    }
-    if (bell_hover) {
-        char ntip[24]; strcpy(ntip, ""); itoa(notification_count, tmp, 10);
-        strcat(ntip, tmp); strcat(ntip, " notifications");
-        int tw = (int)strlen(ntip) * CW;
-        vga_bb_fill_rounded_rect(bell_ix-tw/2, dock_y-24, tw+12, 20, 6, S_BG_LIGHT);
-        vga_bb_draw_string_2x(bell_ix-tw/2+6, dock_y-22, ntip, B_TEXT, 0x00000000);
+    ui_divider_v(tx-3, dock_y+12, PANEL_H-24, 0x30FFFFFF);
+    tx += 5;
+
+    /* ── 5. Notification bell ── */
+    {
+        int bell_w = 28;
+        int bell_hover = (msx >= tx-4 && msx < tx+bell_w+4 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+        ui_tray_icon_bg(tx-4, dock_y+8, bell_w+8, PANEL_H-16, bell_hover);
+
+        int bcx = tx + bell_w/2, bcy = dock_y + PANEL_H/2 - 2;
+        if (notification_count > 0)
+            vga_bb_fill_circle_alpha(bcx, bcy, 14, 0x18FBB724);
+        vga_bb_fill_circle(bcx, bcy-2, 8, S_YELLOW);
+        vga_bb_fill_rect(bcx-8, bcy+2, 16, 5, S_YELLOW);
+        vga_bb_fill_rounded_rect(bcx-10, bcy+7, 20, 3, 1, S_YELLOW);
+        vga_bb_fill_circle(bcx, bcy+12, 2, S_YELLOW);
+
+        if (notification_count > 0) {
+            vga_bb_fill_circle_alpha(bcx+10, bcy-8, 10, 0x25FF6B8A);
+            vga_bb_fill_circle(bcx+10, bcy-8, 8, S_RED);
+            vga_bb_fill_circle(bcx+10, bcy-8, 6, 0xFFFF6B6B);
+            char nc_str[4]; itoa(notification_count, nc_str, 10);
+            vga_bb_draw_string(bcx+7, bcy-12, nc_str, 0xFFFFFFFF, 0x00000000);
+        }
+
+        if (bell_hover && !rearrange_mode) {
+            char ntip[24]; char tmp2[4];
+            itoa(notification_count, tmp2, 10);
+            strcpy(ntip, tmp2); strcat(ntip, " notifications");
+            ui_tooltip(tx + bell_w/2, dock_y, ntip, S_BG_LIGHT, S_TEXT);
+        }
+        tx += bell_w + 10;
     }
 
-    /* ── Clock + Date section ── */
-    vga_bb_draw_vline(bell_ix+30, dock_y+10, PANEL_H-20, B_SEPARATOR);
-    rtc_time_t rtc; rtc_read(&rtc);
-    /* Time — larger */
-    char clk[10]; rtc_format_time(&rtc, clk);
-    clk[5] = '\0'; /* Show only HH:MM */
-    int clk_x = dock_x + dock_w - 110;
-    vga_bb_draw_string_2x(clk_x+1, dock_y+6, clk, 0x60000000, 0x00000000);
-    vga_bb_draw_string_2x(clk_x, dock_y+5, clk, S_TEXT, 0x00000000);
-    /* Date line — smaller */
-    char wday[4]; rtc_format_weekday(&rtc, wday);
-    char date[16]; rtc_format_date(&rtc, date);
-    /* Show "Mon 17 Mar" style */
-    char dateline[20];
-    strcpy(dateline, wday); strcat(dateline, " ");
-    char dm[4]; itoa(rtc.day, dm, 10); strcat(dateline, dm);
-    /* Month abbreviation */
-    const char *months[] = {"","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-    int mi = rtc.month; if (mi < 1) mi = 1; if (mi > 12) mi = 12;
-    strcat(dateline, " "); strcat(dateline, months[mi]);
-    vga_bb_draw_string(clk_x, dock_y+24, dateline, S_TEXT_DIM, 0x00000000);
+    /* ════════════════════════════════════════════════════════
+     *  Clock Pill Segment
+     * ════════════════════════════════════════════════════════ */
+    {
+        int clk_seg_x = dock_x + dock_w - 136;
+        int clk_seg_w = 130;
+        ui_pill_segment(clk_seg_x, dock_y+4, clk_seg_w, PANEL_H-8, 12,
+                        0x14FFFFFF, 0x18FFFFFF, 0);
 
-    /* ── Quick Settings Popup ── */
+        rtc_time_t rtc; rtc_read(&rtc);
+        char clk[10]; rtc_format_time(&rtc, clk);
+        clk[5] = '\0';
+        int clk_x = clk_seg_x + (clk_seg_w - 5*CW) / 2;
+        vga_bb_draw_string_2x(clk_x+2, dock_y+8, clk, 0x40000000, 0x00000000);
+        vga_bb_draw_string_2x(clk_x+1, dock_y+7, clk, 0x25000000, 0x00000000);
+        vga_bb_draw_string_2x(clk_x, dock_y+6, clk, S_TEXT, 0x00000000);
+
+        /* Neon colon pulse — subtle accent on the ":" */
+        vga_bb_fill_circle(clk_x + 2*CW + CW/2, dock_y+12, 2, S_NEON_CYAN);
+        vga_bb_fill_circle(clk_x + 2*CW + CW/2, dock_y+20, 2, S_NEON_CYAN);
+
+        char wday[4]; rtc_format_weekday(&rtc, wday);
+        char dateline[24];
+        strcpy(dateline, wday); strcat(dateline, " ");
+        char dm[4]; itoa(rtc.day, dm, 10); strcat(dateline, dm);
+        const char *months[] = {"","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+        int mi2 = rtc.month; if (mi2 < 1) mi2 = 1; if (mi2 > 12) mi2 = 12;
+        strcat(dateline, " "); strcat(dateline, months[mi2]);
+        int dl_w = (int)strlen(dateline) * 9;
+        int dl_x = clk_seg_x + (clk_seg_w - dl_w) / 2;
+        vga_bb_draw_string(dl_x, dock_y+28, dateline, S_TEXT_DIM, 0x00000000);
+
+        uint32_t up_secs = timer_get_seconds();
+        char ut[16]; char tmp2[8];
+        strcpy(ut, "Up ");
+        itoa(up_secs / 3600, tmp2, 10); strcat(ut, tmp2); strcat(ut, "h");
+        itoa((up_secs % 3600) / 60, tmp2, 10); strcat(ut, tmp2); strcat(ut, "m");
+        int ut_w = (int)strlen(ut) * 9;
+        int ut_x = clk_seg_x + (clk_seg_w - ut_w) / 2;
+        vga_bb_draw_string(ut_x, dock_y+40, ut, 0xFF4A5568, 0x00000000);
+    }
+
+    /* ════════════════════════════════════════════════════════
+     *  Quick Settings Popup — Frosted Neon Style
+     * ════════════════════════════════════════════════════════ */
     if (quick_settings_open) {
-        int qx = dock_x + dock_w - 260, qy = dock_y - 240;
-        int qw = 240, qh = 230;
-        ui_soft_shadow(qx, qy, qw, qh, 10, 3);
-        ui_glass_panel(qx, qy, qw, qh, 10, S_BG, S_GLASS_BORDER);
-        /* Header */
-        vga_bb_draw_string_2x(qx+14, qy+10, "Quick Settings", S_ACCENT, 0x00000000);
-        vga_bb_draw_hline(qx+10, qy+30, qw-20, S_SEPARATOR);
-        /* Volume slider */
-        vga_bb_draw_string_2x(qx+14, qy+40, "Volume", S_TEXT, 0x00000000);
-        ui_progress_bar(qx+14, qy+60, qw-28, 8, 75, 100, S_ACCENT, S_BG_ALT);
-        vga_bb_draw_string(qx+qw-36, qy+56, "75%", S_TEXT_DIM, 0x00000000);
-        /* Brightness */
-        vga_bb_draw_string_2x(qx+14, qy+80, "Brightness", S_TEXT, 0x00000000);
-        ui_progress_bar(qx+14, qy+100, qw-28, 8, 90, 100, S_YELLOW, S_BG_ALT);
-        vga_bb_draw_string(qx+qw-36, qy+96, "90%", S_TEXT_DIM, 0x00000000);
-        /* DND toggle */
-        vga_bb_draw_string_2x(qx+14, qy+124, "Do Not Disturb", S_TEXT, 0x00000000);
-        vga_bb_fill_rounded_rect(qx+qw-56, qy+124, 40, 18, 9, S_BG_LIGHT);
-        vga_bb_fill_circle(qx+qw-56+10, qy+133, 7, S_TEXT_DIM); /* Off state */
-        /* Separator */
-        vga_bb_draw_hline(qx+10, qy+152, qw-20, S_SEPARATOR);
-        /* Network status */
+        int qx = dock_x + dock_w - 290, qy = dock_y - 320;
+        int qw = 270, qh = 310;
+        ui_soft_shadow(qx, qy, qw, qh, 14, 5);
+        ui_frosted_panel(qx, qy, qw, qh, 14, S_BG, S_GLASS_BORDER);
+        ui_neon_border(qx, qy, qw, qh, 14, S_NEON_CYAN);
+
+        ui_section_header(qx+10, qy+12, qw-20, "Quick Settings", S_NEON_CYAN);
+
+        int sy = qy + 42;
+        vga_bb_fill_circle(qx+22, sy+8, 6, S_NEON_CYAN);
+        vga_bb_fill_circle(qx+22, sy+8, 4, S_BG_DEEP);
+        vga_bb_fill_rect(qx+19, sy+5, 3, 6, S_NEON_CYAN);
+        vga_bb_draw_string_2x(qx+36, sy, "Volume", S_TEXT, 0x00000000);
+        ui_progress_bar(qx+14, sy+22, qw-50, 8, 75, 100, S_NEON_CYAN, S_BG_ALT);
+        vga_bb_draw_string(qx+qw-32, sy+18, "75%", S_TEXT_DIM, 0x00000000);
+
+        sy += 40;
+        vga_bb_fill_circle(qx+22, sy+8, 6, S_YELLOW);
+        vga_bb_draw_circle(qx+22, sy+8, 9, S_YELLOW);
+        vga_bb_draw_string_2x(qx+36, sy, "Brightness", S_TEXT, 0x00000000);
+        ui_progress_bar(qx+14, sy+22, qw-50, 8, 90, 100, S_YELLOW, S_BG_ALT);
+        vga_bb_draw_string(qx+qw-32, sy+18, "90%", S_TEXT_DIM, 0x00000000);
+
+        vga_bb_draw_hline(qx+14, sy+38, qw-28, S_SEPARATOR);
+
+        sy += 48;
         {
             net_status_t *ns = net_get_status();
-            vga_bb_fill_circle(qx+22, qy+168, 5, ns->connected ? S_GREEN : S_RED);
-            vga_bb_draw_string_2x(qx+36, qy+162, ns->connected ? "Connected" : "No Connection", S_TEXT, 0x00000000);
-            if (ns->connected)
-                vga_bb_draw_string(qx+36, qy+180, ns->ip_addr, S_TEXT_DIM, 0x00000000);
+            ui_card(qx+14, sy, 70, 54, 8, ns->connected ? S_ACCENT2 : S_BG_ALT);
+            vga_bb_draw_circle(qx+49, sy+26, 10, ns->connected ? S_BG_DEEP : S_TEXT_DIM);
+            vga_bb_draw_circle(qx+49, sy+26, 7, ns->connected ? S_BG_DEEP : S_TEXT_DIM);
+            vga_bb_fill_circle(qx+49, sy+26, 3, ns->connected ? S_BG_DEEP : S_TEXT_DIM);
+            vga_bb_fill_rect(qx+39, sy+27, 20, 12, ns->connected ? S_ACCENT2 : S_BG_ALT);
+            vga_bb_draw_string(qx+24, sy+40, "Wi-Fi", ns->connected ? S_BG_DEEP : S_TEXT_DIM, 0x00000000);
         }
-        /* Uptime */
-        uint32_t ut_s = timer_get_seconds();
-        char upstr[32]; strcpy(upstr, "Uptime: ");
-        char ubuf[8]; itoa(ut_s / 3600, ubuf, 10); strcat(upstr, ubuf); strcat(upstr, "h ");
-        itoa((ut_s % 3600) / 60, ubuf, 10); strcat(upstr, ubuf); strcat(upstr, "m");
-        vga_bb_draw_string(qx+14, qy+200, upstr, S_TEXT_DIM, 0x00000000);
+        ui_card(qx+94, sy, 70, 54, 8, S_BG_ALT);
+        vga_bb_draw_string_2x(qx+118, sy+10, "B", S_BLUE, 0x00000000);
+        vga_bb_draw_string(qx+104, sy+40, "BT", S_TEXT_DIM, 0x00000000);
+        ui_card(qx+174, sy, 70, 54, 8, S_BG_ALT);
+        vga_bb_fill_circle(qx+209, sy+20, 10, S_YELLOW);
+        vga_bb_fill_circle(qx+214, sy+16, 10, S_BG_ALT);
+        vga_bb_draw_string(qx+184, sy+40, "Night", S_TEXT_DIM, 0x00000000);
+
+        vga_bb_draw_hline(qx+14, sy+62, qw-28, S_SEPARATOR);
+
+        sy += 72;
+        vga_bb_draw_string_2x(qx+14, sy, "Do Not Disturb", S_TEXT, 0x00000000);
+        vga_bb_fill_rounded_rect(qx+qw-56, sy, 40, 20, 10, S_BG_LIGHT);
+        vga_bb_fill_circle(qx+qw-56+12, sy+10, 8, S_TEXT_DIM);
+
+        sy += 32;
+        vga_bb_draw_hline(qx+14, sy-4, qw-28, S_SEPARATOR);
+        {
+            net_status_t *ns = net_get_status();
+            ui_status_dot(qx+24, sy+10, 5, ns->connected ? S_GREEN : S_RED);
+            vga_bb_draw_string_2x(qx+38, sy+2, ns->connected ? "Connected" : "No Connection", S_TEXT, 0x00000000);
+            if (ns->connected)
+                vga_bb_draw_string(qx+38, sy+20, ns->ip_addr, S_TEXT_DIM, 0x00000000);
+        }
+
+        sy += 34;
+        {
+            uint32_t ut_s = timer_get_seconds();
+            char upstr[32]; char ubuf[8];
+            strcpy(upstr, "Uptime: ");
+            itoa(ut_s / 3600, ubuf, 10); strcat(upstr, ubuf); strcat(upstr, "h ");
+            itoa((ut_s % 3600) / 60, ubuf, 10); strcat(upstr, ubuf); strcat(upstr, "m");
+            vga_bb_draw_string(qx+14, sy+2, upstr, S_TEXT_DIM, 0x00000000);
+        }
+
+        /* Rearrange mode toggle button at bottom of popup */
+        sy += 24;
+        vga_bb_draw_hline(qx+14, sy-4, qw-28, S_SEPARATOR);
+        {
+            int rb_hover = (msx >= qx+14 && msx < qx+qw-14 && msy >= sy && msy < sy+24);
+            vga_bb_fill_rounded_rect(qx+14, sy, qw-28, 24, 8,
+                                     rearrange_mode ? S_NEON_MAGENTA : (rb_hover ? S_BG_HOVER : S_BG_ALT));
+            const char *rlbl = rearrange_mode ? "Exit Rearrange" : "Rearrange Tray";
+            int rlw = (int)strlen(rlbl) * CW;
+            vga_bb_draw_string_2x(qx + (qw - rlw)/2, sy+4, rlbl,
+                                  rearrange_mode ? S_BG_DEEP : S_TEXT, 0x00000000);
+        }
     }
 }
 
@@ -1193,19 +1380,33 @@ static int handle_click(int mx, int my) {
         }
         kickoff_open=0; return 0;
     }
-    /* Panel launcher */
-    if (my>=dock_y && my<dock_y+PANEL_H && mx>=dock_x && mx<dock_x+64) { kickoff_open=!kickoff_open; quick_settings_open=0; return 0; }
+    /* Panel launcher pill */
+    if (my>=dock_y && my<dock_y+PANEL_H && mx>=dock_x+4 && mx<dock_x+60) { kickoff_open=!kickoff_open; quick_settings_open=0; return 0; }
+    /* Quick settings rearrange button click */
+    if (quick_settings_open) {
+        int qx = dock_x + dock_w - 290, qy = dock_y - 320;
+        int qw = 270;
+        /* Compute rearrange button Y (same as draw_panel calculation) */
+        int rby = qy + 42 + 40 + 48 + 72 + 32 + 34 + 24;
+        if (mx >= qx+14 && mx < qx+qw-14 && my >= rby && my < rby+24) {
+            rearrange_mode = !rearrange_mode;
+            return 0;
+        }
+    }
     /* Panel clicks */
     if (my>=dock_y && my<dock_y+PANEL_H) {
-        /* Clock/date area → toggle quick settings */
-        if (mx >= dock_x + dock_w - 120) { quick_settings_open=!quick_settings_open; return 0; }
-        /* Network tray icon */
-        int ntx = dock_x + dock_w - 380 + 100;
-        if (mx >= ntx-6 && mx < ntx+22) { open_window(WIN_NETWORK); return 0; }
+        /* Clock pill → toggle quick settings (rightmost ~136px) */
+        if (mx >= dock_x + dock_w - 136) { quick_settings_open=!quick_settings_open; return 0; }
+        /* Network tray region */
+        int tray_r2 = dock_x + dock_w - 140;
+        int t_start = tray_r2 - 360;
+        int net_region = t_start + 8 + 48 + 46 + 15;
+        if (mx >= net_region && mx < net_region + 44 && !rearrange_mode) { open_window(WIN_NETWORK); return 0; }
         /* Task buttons */
-        int bx=dock_x + 66;
+        int launcher_w2 = 56;
+        int bx=dock_x + 4 + launcher_w2 + 6 + 8;
         for (int i=0;i<win_order_count;i++) { int wi=win_order[i]; if(!windows[wi].active) continue;
-            int bw=(int)strlen(windows[wi].title)*CW+24; if(bw>200) bw=200;
+            int bw=(int)strlen(windows[wi].title)*CW+32; if(bw>200) bw=200;
             if (mx>=bx&&mx<bx+bw) { bring_to_front(wi); return 0; } bx+=bw+6; }
         return 0;
     }
@@ -1351,8 +1552,14 @@ void desktop_run(void) {
         if (ms.clicked) mouse_clear_events();
         
         if (r_click) {
-            /* Right click -> Context menu */
-            if (!ctx_menu_open) {
+            /* Right click on taskbar → toggle rearrange mode */
+            if (ms.y >= dock_y && ms.y < dock_y + PANEL_H &&
+                ms.x >= dock_x && ms.x < dock_x + dock_w) {
+                rearrange_mode = !rearrange_mode;
+                needs_redraw = 1;
+            }
+            /* Right click elsewhere → Context menu */
+            else if (!ctx_menu_open) {
                 ctx_menu_open = 1; ctx_menu_x = ms.x; ctx_menu_y = ms.y;
                 if (ctx_menu_x + CTX_W > SCRW) ctx_menu_x = SCRW - CTX_W;
                 if (ctx_menu_y + CTX_H > SCRH) ctx_menu_y = SCRH - CTX_H;
@@ -1420,6 +1627,16 @@ void desktop_run(void) {
                     windows[i].sysmon_head = (windows[i].sysmon_head + 1) % 60;
                     needs_redraw = 1;
                 }
+            }
+            /* Update tray memory sparkline (every ~2 sec use same tick) */
+            if (ticks - tray_mem_tick > 200) {
+                int mt = mem_total();
+                int pct = (mt > 0) ? (mem_used() * 100) / mt : 0;
+                if (pct > 100) pct = 100;
+                tray_mem_history[tray_mem_head] = pct;
+                tray_mem_head = (tray_mem_head + 1) % 20;
+                tray_mem_tick = ticks;
+                needs_redraw = 1;
             }
             sysmon_tick = ticks;
         }

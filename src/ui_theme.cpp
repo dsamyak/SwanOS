@@ -1,7 +1,8 @@
 /* ============================================================
- * SwanOS — C++ UI Theme Engine ("Serenity")
+ * SwanOS — C++ UI Theme Engine ("Neon Aurora")
  * Advanced rendering: multi-stop gradients, soft shadows,
- * glassmorphism, refined widgets.
+ * glassmorphism, frosted panels, neon borders, pill segments,
+ * drag handles, refined widgets.
  * ============================================================ */
 
 #include "ui_theme.h"
@@ -53,6 +54,14 @@ inline int slen(const char *s) {
     return n;
 }
 
+/* Simple pseudo-random hash for noise/grain */
+inline uint32_t xorshift(uint32_t seed) {
+    seed ^= seed << 13;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    return seed;
+}
+
 } /* anonymous namespace */
 
 
@@ -97,8 +106,8 @@ void ui_soft_shadow(int x, int y, int w, int h, int radius, int layers) {
     for (int i = layers; i >= 1; i--) {
         int off = i * 2;
         /* Alpha decreases with each layer */
-        uint32_t alpha = 12 + (layers - i) * 6;
-        if (alpha > 60) alpha = 60;
+        uint32_t alpha = 14 + (layers - i) * 8;
+        if (alpha > 70) alpha = 70;
         uint32_t sc = (alpha << 24) | 0x000510;
         vga_bb_fill_rounded_rect(x + off, y + off,
                                  w + i, h + i,
@@ -114,7 +123,7 @@ void ui_window_shadow(int x, int y, int w, int h) {
 
 
 /* ═══════════════════════════════════════════════════════════════
- *  Glassmorphism Panel
+ *  Glassmorphism Panel (Original)
  * ═══════════════════════════════════════════════════════════════ */
 
 extern "C"
@@ -131,6 +140,121 @@ void ui_glass_panel(int x, int y, int w, int h, int radius,
     vga_bb_draw_rect_outline(x, y, w, h, border_color);
     /* Inner top highlight line for depth */
     vga_bb_draw_hline(x + radius, y + 1, w - 2 * radius, S_GLASS);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Frosted Panel — Enhanced glass with noise grain texture
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_frosted_panel(int x, int y, int w, int h, int radius,
+                      uint32_t bg_color, uint32_t border_color) {
+    /* Deep outer shadow glow — neon tint */
+    vga_bb_fill_rounded_rect(x - 2, y - 2, w + 4, h + 4, radius + 2,
+                             S_GLOW_PULSE);
+    /* Outer neon glow halo */
+    vga_bb_fill_rounded_rect(x - 1, y - 1, w + 2, h + 2, radius + 1,
+                             S_ACCENT_GLOW);
+    /* Main body — deep transparency */
+    vga_bb_fill_rounded_rect(x, y, w, h, radius, bg_color);
+
+    /* Noise grain overlay for frosted effect (sparse pixel dithering) */
+    uint32_t seed = 0xDEAD1234;
+    int step = 3;  /* every 3rd pixel to keep fast */
+    for (int dy = 2; dy < h - 2; dy += step) {
+        for (int dx = 2; dx < w - 2; dx += step) {
+            seed = xorshift(seed);
+            /* Very subtle white/dark grain particles */
+            if ((seed & 0x1F) < 3) {
+                uint32_t grain = (seed & 1) ? 0x08FFFFFF : 0x06000000;
+                vga_bb_putpixel(x + dx, y + dy, grain);
+            }
+        }
+    }
+
+    /* Top frosted rim highlight */
+    vga_bb_draw_hline(x + radius, y, w - 2 * radius, 0x20FFFFFF);
+    /* Inner top highlight for depth */
+    vga_bb_draw_hline(x + radius, y + 1, w - 2 * radius, 0x12FFFFFF);
+    /* Bottom inner shadow */
+    vga_bb_draw_hline(x + radius, y + h - 1, w - 2 * radius, 0x10000000);
+    /* Border */
+    vga_bb_draw_rect_outline(x, y, w, h, border_color);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Pill Segment — Individual rounded zone for dock layout
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_pill_segment(int x, int y, int w, int h, int radius,
+                     uint32_t bg_color, uint32_t border_color,
+                     int accent_underline) {
+    /* Subtle shadow beneath segment */
+    vga_bb_fill_rounded_rect(x + 1, y + 1, w, h, radius, 0x20000008);
+    /* Segment body */
+    vga_bb_fill_rounded_rect(x, y, w, h, radius, bg_color);
+    /* Top inner shine */
+    vga_bb_draw_hline(x + radius, y + 1, w - 2 * radius, 0x10FFFFFF);
+    /* Border */
+    vga_bb_draw_rect_outline(x, y, w, h, border_color);
+
+    /* Optional neon accent underline */
+    if (accent_underline) {
+        /* Gradient accent bar at bottom */
+        vga_bb_fill_rounded_rect(x + 4, y + h - 3, w - 8, 2, 1, S_NEON_CYAN);
+        /* Glow beneath the underline */
+        vga_bb_fill_rounded_rect(x + 8, y + h - 1, w - 16, 2, 1, S_GLOW_PULSE);
+    }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Neon Border with Outer Glow
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_neon_border(int x, int y, int w, int h, int radius,
+                    uint32_t neon_color) {
+    RGBA c(neon_color);
+    /* Outer glow halo (3 layers, decreasing alpha) */
+    for (int layer = 3; layer >= 1; layer--) {
+        uint32_t alpha = 8 + (3 - layer) * 6;
+        uint32_t glow = (alpha << 24) | (c.r << 16) | (c.g << 8) | c.b;
+        vga_bb_fill_rounded_rect(x - layer, y - layer,
+                                 w + layer * 2, h + layer * 2,
+                                 radius + layer, glow);
+    }
+    /* Main neon border — 1px outline */
+    uint32_t border = (0x80 << 24) | (c.r << 16) | (c.g << 8) | c.b;
+    vga_bb_draw_rect_outline(x, y, w, h, border);
+    /* Inner top edge shine */
+    uint32_t shine = (0x30 << 24) | (c.r << 16) | (c.g << 8) | c.b;
+    vga_bb_draw_hline(x + radius, y + 1, w - 2 * radius, shine);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Drag Handle (6-dot grip for rearrange mode)
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_drag_handle(int x, int y, int w, int h, uint32_t color) {
+    /* 2 columns × 3 rows of small dots */
+    int dot_r = 2;
+    int cx1 = x + w / 2 - 4;
+    int cx2 = x + w / 2 + 4;
+    int spacing = h / 4;
+    if (spacing < 4) spacing = 4;
+
+    for (int row = 0; row < 3; row++) {
+        int cy = y + spacing + row * spacing;
+        if (cy + dot_r >= y + h) break;
+        vga_bb_fill_circle(cx1, cy, dot_r, color);
+        vga_bb_fill_circle(cx2, cy, dot_r, color);
+    }
 }
 
 
@@ -254,16 +378,14 @@ void ui_progress_bar(int x, int y, int w, int h,
 
 
 /* ═══════════════════════════════════════════════════════════════
- *  Aurora Wallpaper
+ *  Aurora Wallpaper — Enhanced Neon Aurora
  * ═══════════════════════════════════════════════════════════════ */
 
 extern "C"
 void ui_render_aurora_wallpaper(uint32_t *buf, int w, int h) {
-    /* 3-stop vertical gradient base: deep navy → ocean teal → deep purple */
+    /* 3-stop vertical gradient base: deep space → teal nebula → purple nebula */
     int half = h / 2;
     if (half <= 0) half = 1;
-
-    RGBA top(W_TOP), mid(W_MID), bot(W_BOT);
 
     for (int y = 0; y < h; y++) {
         uint32_t c;
@@ -277,10 +399,10 @@ void ui_render_aurora_wallpaper(uint32_t *buf, int w, int h) {
             row[x] = c;
     }
 
-    /* Aurora shimmer — soft teal glow at upper-center */
+    /* Primary aurora — intense cyan glow at upper-center */
     int gcx = w / 2;
     int gcy = h / 3;
-    int max_r2 = (w * w) / 6 + (h * h) / 8;
+    int max_r2 = (w * w) / 5 + (h * h) / 7;
     for (int y = 0; y < h; y++) {
         uint32_t *row = &buf[y * w];
         int dy = y - gcy;
@@ -289,23 +411,23 @@ void ui_render_aurora_wallpaper(uint32_t *buf, int w, int h) {
             int dx = x - gcx;
             int dist2 = (dx * dx) / 3 + dy2;
             if (dist2 < max_r2) {
-                int intensity = 22 - (dist2 * 22) / max_r2;
+                int intensity = 28 - (dist2 * 28) / max_r2;
                 if (intensity > 0) {
                     RGBA bg(row[x]);
-                    /* Teal aurora tint */
-                    bg.r = clamp((int)bg.r + intensity / 2, 0, 255);
-                    bg.g = clamp((int)bg.g + intensity * 2, 0, 255);
-                    bg.b = clamp((int)bg.b + intensity * 3 / 2, 0, 255);
+                    /* Cyan aurora tint — more vivid */
+                    bg.r = clamp((int)bg.r + intensity / 3, 0, 255);
+                    bg.g = clamp((int)bg.g + intensity * 5 / 2, 0, 255);
+                    bg.b = clamp((int)bg.b + intensity * 2, 0, 255);
                     row[x] = bg.pack();
                 }
             }
         }
     }
 
-    /* Secondary aurora — lavender glow at upper-right */
+    /* Secondary aurora — magenta/purple glow at upper-right */
     int g2x = w * 3 / 4;
     int g2y = h / 4;
-    int max2_r2 = (w * w) / 10 + (h * h) / 12;
+    int max2_r2 = (w * w) / 9 + (h * h) / 11;
     for (int y = 0; y < h; y++) {
         uint32_t *row = &buf[y * w];
         int dy = y - g2y;
@@ -314,11 +436,12 @@ void ui_render_aurora_wallpaper(uint32_t *buf, int w, int h) {
             int dx = x - g2x;
             int dist2 = (dx * dx) / 3 + dy2;
             if (dist2 < max2_r2) {
-                int intensity = 14 - (dist2 * 14) / max2_r2;
+                int intensity = 18 - (dist2 * 18) / max2_r2;
                 if (intensity > 0) {
                     RGBA bg(row[x]);
-                    bg.r = clamp((int)bg.r + intensity * 2, 0, 255);
-                    bg.g = clamp((int)bg.g + intensity / 2, 0, 255);
+                    /* Magenta/purple aurora */
+                    bg.r = clamp((int)bg.r + intensity * 3, 0, 255);
+                    bg.g = clamp((int)bg.g + intensity / 4, 0, 255);
                     bg.b = clamp((int)bg.b + intensity * 2, 0, 255);
                     row[x] = bg.pack();
                 }
@@ -326,29 +449,191 @@ void ui_render_aurora_wallpaper(uint32_t *buf, int w, int h) {
         }
     }
 
-    /* Subtle stars */
+    /* Tertiary aurora — subtle green glow at lower-left */
+    int g3x = w / 4;
+    int g3y = h * 2 / 3;
+    int max3_r2 = (w * w) / 12 + (h * h) / 14;
+    for (int y = 0; y < h; y++) {
+        uint32_t *row = &buf[y * w];
+        int dy = y - g3y;
+        int dy2 = dy * dy;
+        for (int x = 0; x < w; x++) {
+            int dx = x - g3x;
+            int dist2 = (dx * dx) / 2 + dy2;
+            if (dist2 < max3_r2) {
+                int intensity = 12 - (dist2 * 12) / max3_r2;
+                if (intensity > 0) {
+                    RGBA bg(row[x]);
+                    /* Green-teal tint */
+                    bg.r = clamp((int)bg.r + intensity / 3, 0, 255);
+                    bg.g = clamp((int)bg.g + intensity * 2, 0, 255);
+                    bg.b = clamp((int)bg.b + intensity, 0, 255);
+                    row[x] = bg.pack();
+                }
+            }
+        }
+    }
+
+    /* Stars — more numerous, color-tinted */
     uint32_t seed = 0xC0FFEE42;
-    for (int i = 0; i < 80; i++) {
+    for (int i = 0; i < 120; i++) {
         seed = seed * 1103515245 + 12345;
         int sx = (seed >> 16) % w;
         seed = seed * 1103515245 + 12345;
         int sy = (seed >> 16) % h;
         seed = seed * 1103515245 + 12345;
-        int brightness = 160 + (seed >> 16) % 80;
-        /* Slight blue-white tint */
-        uint32_t star = (0xFF000000) |
-                        ((brightness - 10) << 16) |
-                        ((brightness - 5) << 8) |
-                        brightness;
+        int brightness = 170 + (seed >> 16) % 85;
+        /* Cool-tinted stars */
+        int sr = clamp(brightness - 20 + (int)((seed >> 8) & 0x1F), 0, 255);
+        int sg = clamp(brightness - 10, 0, 255);
+        int sb = clamp(brightness + 10, 0, 255);
+        uint32_t star = (0xFF000000) | (sr << 16) | (sg << 8) | sb;
         buf[sy * w + sx] = star;
-        /* Some larger stars */
-        if (i < 20 && sx + 1 < w) {
+        /* Some larger stars with glow */
+        if (i < 25 && sx + 1 < w) {
             uint32_t dim = (0xFF000000) |
-                           ((brightness / 2) << 16) |
-                           ((brightness / 2) << 8) |
-                           (brightness / 2);
+                           ((sr / 2) << 16) |
+                           ((sg / 2) << 8) |
+                           (sb / 2);
             buf[sy * w + sx + 1] = dim;
             if (sy + 1 < h) buf[(sy + 1) * w + sx] = dim;
+            if (sx > 0) buf[sy * w + sx - 1] = dim;
+            if (sy > 0) buf[(sy - 1) * w + sx] = dim;
         }
     }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Tray Icon Background with Hover Glow
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_tray_icon_bg(int x, int y, int w, int h, int hovered) {
+    if (hovered) {
+        /* Outer neon glow halo */
+        vga_bb_fill_rounded_rect(x - 1, y - 1, w + 2, h + 2,
+                                 (h + 2) / 2, S_ACCENT_GLOW);
+        /* Bright fill */
+        vga_bb_fill_rounded_rect(x, y, w, h, h / 2, S_BG_HOVER);
+        /* Top shine */
+        vga_bb_draw_hline(x + h/2, y + 1, w - h > 0 ? w - h : 1, 0x15FFFFFF);
+    } else {
+        /* Subtle idle background */
+        vga_bb_fill_rounded_rect(x, y, w, h, h / 2, 0x14FFFFFF);
+    }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Mini Sparkline Bar Chart
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_mini_graph(int x, int y, int w, int h,
+                   const int *values, int count,
+                   uint32_t bar_lo, uint32_t bar_hi) {
+    if (count <= 0) return;
+    int max_count = count > 20 ? 20 : count;
+
+    /* Dark background */
+    vga_bb_fill_rounded_rect(x, y, w, h, 3, S_BG_DEEP);
+    /* Subtle border */
+    vga_bb_draw_rect_outline(x, y, w, h, 0x20FFFFFF);
+
+    int bar_w = (w - 4) / max_count;
+    if (bar_w < 1) bar_w = 1;
+    int gap = 1;
+
+    for (int i = 0; i < max_count; i++) {
+        int v = values[i];
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        int bh = (v * (h - 4)) / 100;
+        if (bh < 1 && v > 0) bh = 1;
+
+        /* Interpolate color low → high based on value */
+        uint32_t c = lerp(bar_lo, bar_hi, v, 100);
+        int bx = x + 2 + i * bar_w;
+        int by = y + h - 2 - bh;
+        vga_bb_fill_rect(bx, by, bar_w - gap, bh, c);
+    }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Pill-Shaped Badge
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_badge(int x, int y, const char *label,
+              uint32_t bg_color, uint32_t text_color) {
+    int tw = slen(label) * 9;  /* 1x font width = 9px */
+    int pw = tw + 10;
+    int ph = 14;
+    /* Pill background */
+    vga_bb_fill_rounded_rect(x, y, pw, ph, ph / 2, bg_color);
+    /* Top shine */
+    vga_bb_draw_hline(x + ph/2, y + 1, pw - ph > 0 ? pw - ph : 1, 0x18FFFFFF);
+    /* Label centered */
+    vga_bb_draw_string(x + 5, y + 3, label, text_color, 0x00000000);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Vertical Divider with Alpha Fade
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_divider_v(int x, int y, int h, uint32_t color) {
+    RGBA c(color);
+    for (int dy = 0; dy < h; dy++) {
+        /* Fade at top and bottom 25% */
+        int fade_zone = h / 4;
+        if (fade_zone < 1) fade_zone = 1;
+        uint32_t alpha = c.a;
+        if (dy < fade_zone)
+            alpha = (c.a * dy) / fade_zone;
+        else if (dy > h - fade_zone)
+            alpha = (c.a * (h - dy)) / fade_zone;
+        uint32_t px = (alpha << 24) | (c.r << 16) | (c.g << 8) | c.b;
+        vga_bb_putpixel(x, y + dy, px);
+        /* Double width for visibility */
+        vga_bb_putpixel(x + 1, y + dy, px);
+    }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Glass Tooltip (renders above anchor point)
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_tooltip(int anchor_x, int anchor_y,
+                const char *text, uint32_t bg, uint32_t fg) {
+    int tw = slen(text) * 18;  /* 2x font */
+    int pw = tw + 20;
+    int ph = 26;
+    int tx = anchor_x - pw / 2;
+    int ty = anchor_y - ph - 8;
+
+    /* Clamp to screen */
+    if (tx < 4) tx = 4;
+    if (tx + pw > GFX_W - 4) tx = GFX_W - 4 - pw;
+    if (ty < 2) ty = 2;
+
+    /* Shadow */
+    vga_bb_fill_rounded_rect(tx + 2, ty + 2, pw, ph, 8, S_SHADOW);
+    /* Glass body */
+    vga_bb_fill_rounded_rect(tx, ty, pw, ph, 8, bg);
+    vga_bb_draw_rect_outline(tx, ty, pw, ph, S_GLASS_BORDER);
+    /* Top shine */
+    vga_bb_draw_hline(tx + 8, ty + 1, pw - 16, 0x20FFFFFF);
+    /* Small pointer triangle */
+    int px = anchor_x;
+    for (int i = 0; i < 5; i++) {
+        vga_bb_draw_hline(px - i, ty + ph + i, 2 * i + 1, bg);
+    }
+    /* Text */
+    vga_bb_draw_string_2x(tx + 10, ty + 5, text, fg, 0x00000000);
 }
