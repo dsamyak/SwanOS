@@ -294,7 +294,7 @@ static void cmd_help(void) {
     screen_set_color(VGA_CYAN, VGA_BLACK);
     screen_print("  ");
     screen_putchar((char)6);
-    screen_print(" SwanOS v2.0");
+    screen_print(" SwanOS v3.0");
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
     screen_print("  ");
     screen_putchar((char)250);
@@ -311,6 +311,8 @@ static void cmd_help(void) {
 
     print_help_section("AI", VGA_LIGHT_CYAN);
     print_help_entry("ask <question>", "Ask the AI assistant");
+    print_help_entry("setkey <key>", "Set Groq API key");
+    print_help_entry("aikey", "Check API key status");
 
     print_help_section("FILES", VGA_YELLOW);
     print_help_entry("cd <dir>", "Change directory");
@@ -405,7 +407,7 @@ static int execute_command(char *input) {
         screen_set_color(VGA_DARK_GREY, VGA_BLACK);
         screen_print("   ");
         screen_putchar((char)6);
-        screen_print(" SwanOS v2.0\n\n");
+        screen_print(" SwanOS v3.0\n\n");
         screen_set_color(VGA_WHITE, VGA_BLACK);
         return 0;
     }
@@ -445,6 +447,44 @@ static int execute_command(char *input) {
         screen_set_color(VGA_LIGHT_GREY, VGA_BLACK);
         screen_print(response);
         screen_print("\n\n");
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        return 0;
+    }
+
+    /* ── Set API Key ── */
+    if (strcmp(cmd, "setkey") == 0) {
+        if (arg[0] == '\0') {
+            screen_set_color(VGA_RED, VGA_BLACK);
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Usage: setkey <GROQ_API_KEY>\n");
+            screen_set_color(VGA_WHITE, VGA_BLACK);
+            return 0;
+        }
+        llm_set_api_key(arg);
+        screen_set_color(VGA_GREEN, VGA_BLACK);
+        screen_print("   ");
+        screen_putchar((char)254);
+        screen_print(" API key saved.\n");
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        return 0;
+    }
+
+    /* ── Check API Key ── */
+    if (strcmp(cmd, "aikey") == 0) {
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_print("   ");
+        screen_putchar((char)250);
+        screen_print(" ");
+        if (llm_ready()) {
+            screen_set_color(VGA_GREEN, VGA_BLACK);
+            screen_putchar((char)254);
+            screen_print(" API key is configured.\n");
+        } else {
+            screen_set_color(VGA_YELLOW, VGA_BLACK);
+            screen_putchar((char)254);
+            screen_print(" No API key set. Use 'setkey <KEY>'.\n");
+        }
         screen_set_color(VGA_WHITE, VGA_BLACK);
         return 0;
     }
@@ -817,7 +857,7 @@ static int execute_command(char *input) {
         screen_set_color(VGA_CYAN, VGA_BLACK);
         screen_print(" OS    : ");
         screen_set_color(VGA_WHITE, VGA_BLACK);
-        screen_print("SwanOS v2.0 (bare-metal)");
+        screen_print("SwanOS v3.0 (bare-metal)");
         screen_set_color(VGA_DARK_GREY, VGA_BLACK);
         screen_putchar((char)179);
         screen_print("\n   ");
@@ -988,7 +1028,7 @@ static int execute_command(char *input) {
         screen_set_color(VGA_CYAN, VGA_BLACK);
         screen_print("  ");
         screen_putchar((char)6);
-        screen_print(" SwanOS v2.0 ");
+        screen_print(" SwanOS v3.0 ");
         screen_set_color(VGA_DARK_GREY, VGA_BLACK);
         screen_putchar((char)250);
         screen_print("  ");

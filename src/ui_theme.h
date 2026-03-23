@@ -98,6 +98,9 @@ void ui_neon_border(int x, int y, int w, int h, int radius,
 /* Drag handle indicator (6-dot grip for rearrange mode) */
 void ui_drag_handle(int x, int y, int w, int h, uint32_t color);
 
+/* Desktop icon card — frosted glass with hover glow and neon ring */
+void ui_icon_card(int x, int y, int w, int h, int hovered, uint32_t accent);
+
 /* Card widget — rounded rect with subtle inner top highlight */
 void ui_card(int x, int y, int w, int h, int radius, uint32_t bg_color);
 

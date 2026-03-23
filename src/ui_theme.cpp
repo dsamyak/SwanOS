@@ -259,6 +259,39 @@ void ui_drag_handle(int x, int y, int w, int h, uint32_t color) {
 
 
 /* ═══════════════════════════════════════════════════════════════
+ *  Desktop Icon Card — Frosted glass with hover neon glow
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_icon_card(int x, int y, int w, int h, int hovered, uint32_t accent) {
+    if (hovered) {
+        /* Neon glow halo when hovered */
+        RGBA c(accent);
+        for (int layer = 3; layer >= 1; layer--) {
+            uint32_t alpha = 10 + (3 - layer) * 8;
+            uint32_t glow = (alpha << 24) | (c.r << 16) | (c.g << 8) | c.b;
+            vga_bb_fill_rounded_rect(x - layer, y - layer,
+                                     w + layer * 2, h + layer * 2,
+                                     12 + layer, glow);
+        }
+        /* Brighter frosted glass */
+        vga_bb_fill_rounded_rect(x, y, w, h, 12, 0x35FFFFFF);
+        /* Neon border */
+        uint32_t border = (0x60 << 24) | (c.r << 16) | (c.g << 8) | c.b;
+        vga_bb_draw_rect_outline(x, y, w, h, border);
+    } else {
+        /* Subtle shadow */
+        vga_bb_fill_rounded_rect(x + 3, y + 3, w, h, 12, S_SHADOW);
+        /* Frosted glass */
+        vga_bb_fill_rounded_rect(x, y, w, h, 12, 0x20FFFFFF);
+        vga_bb_draw_rect_outline(x, y, w, h, 0x18FFFFFF);
+    }
+    /* Top inner shine */
+    vga_bb_draw_hline(x + 12, y + 1, w - 24, 0x12FFFFFF);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
  *  Card Widget
  * ═══════════════════════════════════════════════════════════════ */
 
