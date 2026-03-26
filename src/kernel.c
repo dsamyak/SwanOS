@@ -24,6 +24,7 @@
 #include "multiboot.h"
 #include "llm.h"
 #include "network.h"
+#include "audit.h"
 
 /* ── Advanced Boot Splash ────────────────────────────────── */
 /* Particle system, neural network nodes, pulsing rings,
@@ -501,6 +502,9 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
     boot_status("In-memory filesystem mounted");
 
     user_init();
+
+    audit_init();
+    boot_status("Audit system initialized");
 
     llm_init();
     if (llm_ready())

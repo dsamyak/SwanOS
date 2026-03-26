@@ -22,6 +22,7 @@
 #include "serial.h"
 #include "network.h"
 #include "ui_theme.h"
+#include "audit.h"
 
 /* ── Layout ───────────────────────────────────────────────── */
 #define SCRW       GFX_W
@@ -60,7 +61,7 @@
 #define B_SHADOW     S_SHADOW
 
 /* ── Icons ────────────────────────────────────────────────── */
-#define MAX_WINDOWS 12
+#define MAX_WINDOWS 13
 #define WIN_TERM 0
 #define WIN_FILES 1
 #define WIN_NOTES 2
@@ -71,10 +72,11 @@
 #define WIN_STORE 7
 #define WIN_BROWSER 8
 #define WIN_NETWORK 9
+#define WIN_AUDIT 10
 
 #define ICON_W     80
 #define ICON_H     80
-#define MAX_ICONS  10
+#define MAX_ICONS  12
 
 typedef struct { int x, y; const char *label; int app_id; } desktop_icon_t;
 
@@ -89,8 +91,35 @@ static desktop_icon_t icons[MAX_ICONS] = {
     {170, 40,  "Store",    WIN_STORE},
     {170, 150, "Browser",  WIN_BROWSER},
     {170, 260, "Network",  WIN_NETWORK},
+    {170, 370, "Audit",    WIN_AUDIT},
+    {0, 0, 0, 0},
 };
-static int num_icons = 10;
+static int num_icons = 11;
+
+/* ── Notification Toast System ──────────────────────────── */
+#define MAX_TOASTS 4
+#define TOAST_DURATION 300  /* ticks (~3 seconds at 100Hz) */
+typedef struct {
+    char text[48];
+    uint32_t color;
+    uint32_t start_tick;
+    int active;
+} toast_t;
+static toast_t toasts[MAX_TOASTS];
+
+static void toast_show(const char *text, uint32_t color) {
+    /* Find free toast slot */
+    int slot = -1;
+    for (int i = 0; i < MAX_TOASTS; i++) {
+        if (!toasts[i].active) { slot = i; break; }
+    }
+    if (slot < 0) slot = 0; /* overwrite oldest */
+    strncpy(toasts[slot].text, text, 47);
+    toasts[slot].text[47] = '\0';
+    toasts[slot].color = color;
+    toasts[slot].start_tick = timer_get_ticks();
+    toasts[slot].active = 1;
+}
 
 /* ── Windows ──────────────────────────────────────────────── */
 
@@ -124,17 +153,17 @@ static int dragging = 0, drag_win = -1, drag_ox, drag_oy;
 /* ── Kickoff Menu ─────────────────────────────────────────── */
 static int kickoff_open = 0;
 #define KO_W     280
-#define KO_ITEMS  12
+#define KO_ITEMS  13
 #define KO_ITEM_H 36
-#define KO_HEADER  64
+#define KO_HEADER  80
 #define KO_H      (KO_HEADER + KO_ITEMS * KO_ITEM_H + 8)
 
 static const char *ko_labels[KO_ITEMS] = {
     "AI Chat", "Terminal", "Files", "Notes", "Calc", "SysMonitor", "About",
-    "Store", "Browser", "Network",
+    "Store", "Browser", "Network", "Audit Log",
     "--------", "Shut Down"
 };
-static int ko_ids[KO_ITEMS] = {WIN_AI,WIN_TERM,WIN_FILES,WIN_NOTES,WIN_CALC,WIN_SYSMON,WIN_ABOUT,WIN_STORE,WIN_BROWSER,WIN_NETWORK,-1,-2};
+static int ko_ids[KO_ITEMS] = {WIN_AI,WIN_TERM,WIN_FILES,WIN_NOTES,WIN_CALC,WIN_SYSMON,WIN_ABOUT,WIN_STORE,WIN_BROWSER,WIN_NETWORK,WIN_AUDIT,-1,-2};
 
 /* ── Workspace ────────────────────────────────────────────── */
 #define MAX_WORKSPACES 3
@@ -186,6 +215,7 @@ static uint32_t icon_accent(int app_id) {
         case WIN_STORE:   return S_GREEN;
         case WIN_BROWSER: return S_ORANGE;
         case WIN_NETWORK: return S_BLUE;
+        case WIN_AUDIT:   return S_NEON_MAGENTA;
         default:          return S_NEON_CYAN;
     }
 }
@@ -263,6 +293,14 @@ static void draw_icon_glyph(int x, int y, int app_id, int hovered) {
             vga_bb_draw_vline(cx+12, cy+2, 24, S_ORANGE);
             vga_bb_fill_circle(cx+20, cy+4, 4, S_NEON_CYAN);
             vga_bb_fill_circle(cx+20, cy+4, 2, B_BG_DARK);
+            break;
+        case WIN_AUDIT:
+            vga_bb_fill_rounded_rect(cx-1, cy+1, 28, 28, 4, B_SHADOW);
+            vga_bb_fill_rounded_rect(cx-2, cy, 28, 28, 4, S_NEON_MAGENTA);
+            vga_bb_fill_rounded_rect(cx, cy+2, 24, 24, 3, B_BG_DARK);
+            for (int i = 0; i < 4; i++)
+                vga_bb_draw_hline(cx+4, cy+6+i*5, 16, S_NEON_MAGENTA);
+            vga_bb_fill_circle(cx+18, cy+6, 3, S_YELLOW);
             break;
         case WIN_NETWORK:
             vga_bb_fill_rounded_rect(cx-1, cy+1, 32, 28, 6, B_SHADOW);
@@ -769,9 +807,27 @@ static void draw_kickoff(void) {
     vga_bb_draw_string_2x(mx_left+27, mx_top+27, user_current()[0] ? (char[]){user_current()[0],0} : "U", 0x80000000, 0);
     vga_bb_draw_string_2x(mx_left+26, mx_top+26, user_current()[0] ? (char[]){user_current()[0],0} : "U", S_NEON_CYAN, 0);
     /* Username */
-    vga_bb_draw_string_2x(mx_left+63, mx_top+21, user_current(), 0x80000000, 0);
-    vga_bb_draw_string_2x(mx_left+62, mx_top+20, user_current(), B_TEXT, 0);
-    vga_bb_draw_string_2x(mx_left+62, mx_top+38, "SwanOS User", B_TEXT_DIM, 0);
+    vga_bb_draw_string_2x(mx_left+63, mx_top+18, user_current(), 0x80000000, 0);
+    vga_bb_draw_string_2x(mx_left+62, mx_top+17, user_current(), B_TEXT, 0);
+    /* Login count badge */
+    {
+        user_profile_t *prof = user_get_profile();
+        char login_info[32];
+        char tmp_lc[8];
+        strcpy(login_info, "Login #");
+        itoa(prof->login_count, tmp_lc, 10);
+        strcat(login_info, tmp_lc);
+        vga_bb_draw_string_2x(mx_left+62, mx_top+35, login_info, S_YELLOW, 0);
+        /* Session timer */
+        uint32_t ss = user_session_seconds();
+        uint32_t sm = ss / 60; uint32_t sh = sm / 60;
+        ss %= 60; sm %= 60;
+        char sess[20]; char stmp[8];
+        strcpy(sess, "Session: ");
+        itoa(sh, stmp, 10); strcat(sess, stmp); strcat(sess, "h");
+        itoa(sm, stmp, 10); strcat(sess, stmp); strcat(sess, "m");
+        vga_bb_draw_string_2x(mx_left+62, mx_top+52, sess, B_TEXT_DIM, 0);
+    }
 
     /* Separator with neon accent */
     vga_bb_draw_hline(mx_left+12, mx_top + KO_HEADER - 4, KO_W-24, B_SEPARATOR);
@@ -780,7 +836,7 @@ static void draw_kickoff(void) {
     /* Menu items */
     mouse_state_t ms; mouse_get_state(&ms);
     /* Per-item neon accent colors */
-    uint32_t ko_colors[KO_ITEMS] = {S_NEON_PURPLE, S_GREEN, S_YELLOW, S_NEON_CYAN, S_PINK, S_RED, S_BLUE, S_GREEN, S_ORANGE, S_BLUE, 0, S_RED};
+    uint32_t ko_colors[KO_ITEMS] = {S_NEON_PURPLE, S_GREEN, S_YELLOW, S_NEON_CYAN, S_PINK, S_RED, S_BLUE, S_GREEN, S_ORANGE, S_BLUE, S_NEON_MAGENTA, 0, S_RED};
     for (int i = 0; i < KO_ITEMS; i++) {
         int iy = mx_top + KO_HEADER + i * KO_ITEM_H;
         if (ko_labels[i][0] == '-') {
@@ -1268,6 +1324,77 @@ static void draw_window(int wi) {
             vga_bb_draw_string_2x(cx+cw/2-10*CW, ny+16, "No network adapter found", B_TEXT_DIM, 0x00000000);
         }
     }
+    else if (w->type == WIN_AUDIT) {
+        vga_bb_fill_rect(cx, cy, cw, ch, B_BG_DARK);
+        /* Header */
+        vga_bb_fill_rect(cx, cy, cw, CH+8, B_BG_ALT);
+        vga_bb_fill_circle(cx+20, cy+12, 6, S_NEON_MAGENTA);
+        vga_bb_draw_string_2x(cx+32, cy+4, "Audit Log", S_NEON_MAGENTA, 0x00000000);
+        /* Event count badge */
+        char ecnt[12]; char etmp[8];
+        int ac = audit_get_count();
+        strcpy(ecnt, ""); itoa(ac, etmp, 10); strcat(ecnt, etmp); strcat(ecnt, " events");
+        int ecnw = (int)strlen(ecnt) * CW;
+        vga_bb_fill_rounded_rect(cx+cw-ecnw-20, cy+2, ecnw+12, CH+4, 6, S_NEON_MAGENTA);
+        vga_bb_draw_string_2x(cx+cw-ecnw-14, cy+4, ecnt, B_BG_DARK, 0x00000000);
+        vga_bb_draw_hline(cx, cy+CH+8, cw, B_SEPARATOR);
+        /* Event list */
+        int ey = cy + CH + 14;
+        int total = ac;
+        if (total > AUDIT_MAX_ENTRIES) total = AUDIT_MAX_ENTRIES;
+        int max_visible = (ch - CH - 20) / (CH + 6);
+        int start = total > max_visible ? total - max_visible : 0;
+        for (int i = start; i < total && ey + CH + 4 < cy + ch; i++) {
+            const audit_entry_t *e = audit_get_entry(i);
+            if (!e || !e->used) continue;
+            /* Alternating row background */
+            if ((i - start) % 2 == 0)
+                vga_bb_fill_rect(cx+2, ey-2, cw-4, CH+4, 0x08FFFFFF);
+            /* Timestamp */
+            char ts[12]; char tt[4];
+            strcpy(ts, "");
+            if (e->hour < 10) strcat(ts, "0");
+            itoa(e->hour, tt, 10); strcat(ts, tt); strcat(ts, ":");
+            if (e->minute < 10) strcat(ts, "0");
+            itoa(e->minute, tt, 10); strcat(ts, tt); strcat(ts, ":");
+            if (e->second < 10) strcat(ts, "0");
+            itoa(e->second, tt, 10); strcat(ts, tt);
+            vga_bb_draw_string_2x(cx+8, ey, ts, B_TEXT_DIM, 0x00000000);
+            /* Event type with color */
+            uint32_t ec = S_TEXT;
+            switch (e->type) {
+                case AUDIT_LOGIN:       ec = S_GREEN; break;
+                case AUDIT_LOGOUT:      ec = S_YELLOW; break;
+                case AUDIT_FILE_CREATE: ec = S_NEON_CYAN; break;
+                case AUDIT_FILE_DELETE: ec = S_RED; break;
+                case AUDIT_APP_OPEN:    ec = S_BLUE; break;
+                case AUDIT_APP_CLOSE:   ec = S_TEXT_DIM; break;
+                case AUDIT_COMMAND:     ec = S_TEXT; break;
+                case AUDIT_FILE_WRITE:  ec = S_GREEN; break;
+                case AUDIT_SYSTEM:      ec = S_NEON_PURPLE; break;
+            }
+            /* Type badge */
+            const char *tn = audit_type_name(e->type);
+            int tw2 = (int)strlen(tn) * CW;
+            vga_bb_fill_rounded_rect(cx+8*CW+16, ey-1, tw2+8, CH+2, 4, ec);
+            vga_bb_draw_string_2x(cx+8*CW+20, ey, tn, B_BG_DARK, 0x00000000);
+            /* User */
+            int ux = cx + 8*CW + tw2 + 32;
+            vga_bb_draw_string_2x(ux, ey, e->user, S_NEON_CYAN, 0x00000000);
+            /* Detail */
+            if (e->detail[0]) {
+                int dx = ux + ((int)strlen(e->user)+1) * CW;
+                int max_dc = (cx + cw - dx - 8) / CW;
+                if (max_dc > 0) {
+                    char dtrunc[40];
+                    strncpy(dtrunc, e->detail, max_dc > 39 ? 39 : max_dc);
+                    dtrunc[max_dc > 39 ? 39 : max_dc] = '\0';
+                    vga_bb_draw_string_2x(dx, ey, dtrunc, B_TEXT_DIM, 0x00000000);
+                }
+            }
+            ey += CH + 6;
+        }
+    }
 }
 
 /* ── Cursor (Breeze-like arrow) ───────────────────────────── */
@@ -1312,6 +1439,7 @@ static void bring_to_front(int wi) {
 }
 
 static void close_window(int wi) {
+    audit_log(AUDIT_APP_CLOSE, windows[wi].title);
     windows[wi].active=0;
     int pos=-1;
     for (int i=0;i<win_order_count;i++) if (win_order[i]==wi) {pos=i;break;}
@@ -1338,8 +1466,12 @@ static void open_window(int type) {
         case WIN_STORE: strcpy(w->title,"Store"); w->x=200;w->y=60;w->w=860;w->h=560; w->store_sel=0; memset(w->store_downloaded,0,sizeof(w->store_downloaded)); break;
         case WIN_BROWSER: strcpy(w->title,"Browser"); w->x=180;w->y=40;w->w=900;w->h=640; w->browser_tab=0; break;
         case WIN_NETWORK: strcpy(w->title,"Network"); w->x=300;w->y=100;w->w=700;w->h=580; break;
+        case WIN_AUDIT: strcpy(w->title,"Audit Log"); w->x=260;w->y=120;w->w=820;w->h=520; break;
     }
     win_order[win_order_count++]=wi; win_focus=wi;
+    /* Audit log the app open */
+    audit_log(AUDIT_APP_OPEN, w->title);
+    toast_show(w->title, icon_accent(type));
 }
 
 /* ── Terminal helpers ─────────────────────────────────────── */
@@ -1552,28 +1684,106 @@ static int handle_click(int mx, int my) {
     kickoff_open=0; return 0;
 }
 
-/* ── Widgets ──────────────────────────────────────────────── */
-static void draw_widgets(void) {
-    /* Clock Widget */
-    int cx = SCRW - 180, cy = 40;
-    ui_card(cx, cy, 160, 160, 12, 0x35FFFFFF);
-    ui_neon_border(cx, cy, 160, 160, 12, S_NEON_CYAN);
-    vga_bb_fill_circle(cx+80, cy+80, 60, S_BG_DARK);
-    vga_bb_draw_circle(cx+80, cy+80, 60, S_NEON_CYAN);
-    rtc_time_t t; rtc_read(&t);
-    char tbuf[16]; rtc_format_time(&t, tbuf);
-    vga_bb_draw_string_2x(cx+26, cy+68, tbuf, S_TEXT, 0);
+/* ── Draw Notification Toasts ────────────────────────── */
+static void draw_toasts(void) {
+    uint32_t now = timer_get_ticks();
+    int ty = 20;
+    for (int i = 0; i < MAX_TOASTS; i++) {
+        if (!toasts[i].active) continue;
+        uint32_t elapsed = now - toasts[i].start_tick;
+        if (elapsed > TOAST_DURATION) {
+            toasts[i].active = 0;
+            continue;
+        }
+        /* Fade calculation */
+        int alpha = 0xFF;
+        if (elapsed > TOAST_DURATION - 60) {
+            alpha = ((TOAST_DURATION - elapsed) * 0xFF) / 60;
+        }
+        int tw2 = (int)strlen(toasts[i].text) * CW + 40;
+        int tx = SCRW - tw2 - 20;
+        /* Toast card with neon accent */
+        uint32_t bg_a = (((uint32_t)alpha * 0xD0) / 0xFF) << 24 | (S_BG & 0x00FFFFFF);
+        vga_bb_fill_rounded_rect(tx, ty, tw2, 36, 10, bg_a);
+        vga_bb_fill_rounded_rect(tx, ty, 4, 36, 2, toasts[i].color);
+        /* Icon dot */
+        vga_bb_fill_circle(tx+16, ty+18, 5, toasts[i].color);
+        vga_bb_fill_circle(tx+16, ty+18, 3, S_BG_DEEP);
+        /* Text */
+        vga_bb_draw_string_2x(tx+28, ty+10, toasts[i].text, S_TEXT, 0x00000000);
+        ty += 44;
+    }
+}
 
-    /* Stats Widget */
-    int sx = SCRW - 180, sy = 220;
-    ui_card(sx, sy, 160, 120, 12, 0x35FFFFFF);
-    ui_neon_border(sx, sy, 160, 120, 12, S_NEON_PURPLE);
-    vga_bb_draw_string_2x(sx+16, sy+16, "SYSTEM", S_TEXT, 0);
+/* ── Widgets ──────────────────────────────────────────── */
+static void draw_widgets(void) {
+    rtc_time_t t; rtc_read(&t);
+
+    /* Greeting Widget — dynamic based on time of day */
+    {
+        int gx = SCRW - 260, gy = 20;
+        ui_card(gx, gy, 240, 52, 14, 0x30FFFFFF);
+        /* Determine greeting and color */
+        const char *greeting;
+        uint32_t gc;
+        if (t.hour < 6) { greeting = "Good Night"; gc = S_NEON_PURPLE; }
+        else if (t.hour < 12) { greeting = "Good Morning"; gc = S_YELLOW; }
+        else if (t.hour < 17) { greeting = "Good Afternoon"; gc = S_ORANGE; }
+        else if (t.hour < 21) { greeting = "Good Evening"; gc = S_NEON_CYAN; }
+        else { greeting = "Good Night"; gc = S_NEON_PURPLE; }
+        vga_bb_fill_rounded_rect(gx, gy, 4, 52, 2, gc);
+        vga_bb_draw_string_2x(gx+14, gy+8, greeting, gc, 0);
+        /* Username */
+        char gname[24];
+        strcpy(gname, "");
+        strcat(gname, user_current());
+        vga_bb_draw_string_2x(gx+14, gy+28, gname, S_TEXT_DIM, 0);
+    }
+
+    /* Clock Widget */
+    int cx = SCRW - 180, cy = 86;
+    ui_card(cx, cy, 160, 140, 12, 0x35FFFFFF);
+    ui_neon_border(cx, cy, 160, 140, 12, S_NEON_CYAN);
+    vga_bb_fill_circle(cx+80, cy+60, 50, S_BG_DARK);
+    vga_bb_draw_circle(cx+80, cy+60, 50, S_NEON_CYAN);
+    char tbuf[16]; rtc_format_time(&t, tbuf);
+    vga_bb_draw_string_2x(cx+30, cy+50, tbuf, S_TEXT, 0);
+    /* Date under clock */
+    char datebuf[12]; rtc_format_date(&t, datebuf);
+    vga_bb_draw_string(cx+40, cy+110, datebuf, S_TEXT_DIM, 0);
+
+    /* Stats Widget with session timer */
+    int sx = SCRW - 180, sy = 240;
+    ui_card(sx, sy, 160, 150, 12, 0x35FFFFFF);
+    ui_neon_border(sx, sy, 160, 150, 12, S_NEON_PURPLE);
+    vga_bb_draw_string_2x(sx+16, sy+12, "SYSTEM", S_TEXT, 0);
     int pct = (mem_total() > 0) ? (mem_used() * 100) / mem_total() : 0;
-    vga_bb_draw_string(sx+16, sy+40, "Memory", S_TEXT_DIM, 0);
-    ui_progress_bar(sx+16, sy+56, 128, 12, pct, 100, S_NEON_PURPLE, S_BG_DEEP);
-    char mbuf[32]; strcpy(mbuf, "Used: "); char nb[10]; itoa(mem_used()/1024, nb, 10); strcat(mbuf, nb); strcat(mbuf, " KB");
-    vga_bb_draw_string(sx+16, sy+76, mbuf, S_TEXT, 0);
+    vga_bb_draw_string(sx+16, sy+36, "Memory", S_TEXT_DIM, 0);
+    ui_progress_bar(sx+16, sy+50, 128, 10, pct, 100, S_NEON_PURPLE, S_BG_DEEP);
+    char mbuf[32]; strcpy(mbuf, ""); char nb[10]; itoa(mem_used()/1024, nb, 10); strcat(mbuf, nb); strcat(mbuf, " / ");
+    itoa(mem_total()/1024, nb, 10); strcat(mbuf, nb); strcat(mbuf, " KB");
+    vga_bb_draw_string(sx+16, sy+66, mbuf, S_TEXT_DIM, 0);
+    /* Session timer */
+    vga_bb_draw_hline(sx+16, sy+82, 128, S_SEPARATOR);
+    vga_bb_draw_string(sx+16, sy+90, "Session", S_TEXT_DIM, 0);
+    {
+        uint32_t ss = user_session_seconds();
+        uint32_t sm = ss / 60; uint32_t sh = sm / 60;
+        ss %= 60; sm %= 60;
+        char stbuf[20]; char stmp[8];
+        strcpy(stbuf, "");
+        itoa(sh, stmp, 10); strcat(stbuf, stmp); strcat(stbuf, "h ");
+        itoa(sm, stmp, 10); strcat(stbuf, stmp); strcat(stbuf, "m ");
+        itoa(ss, stmp, 10); strcat(stbuf, stmp); strcat(stbuf, "s");
+        vga_bb_draw_string_2x(sx+16, sy+104, stbuf, S_NEON_CYAN, 0);
+    }
+    /* Audit event count */
+    vga_bb_draw_hline(sx+16, sy+124, 128, S_SEPARATOR);
+    {
+        char abuf[20]; char atmp[8];
+        strcpy(abuf, ""); itoa(audit_get_count(), atmp, 10); strcat(abuf, atmp); strcat(abuf, " events");
+        vga_bb_draw_string(sx+16, sy+132, abuf, S_NEON_MAGENTA, 0);
+    }
 }
 
 static void draw_workspace_indicator(void) {
@@ -1587,7 +1797,7 @@ static void draw_workspace_indicator(void) {
     }
 }
 
-/* ── Full desktop draw ────────────────────────────────────── */
+/* ── Full desktop draw ────────────────────────────────── */
 static void draw_desktop(void) {
     draw_wallpaper();
     draw_icons();
@@ -1601,6 +1811,7 @@ static void draw_desktop(void) {
     draw_panel();
     draw_kickoff();
     draw_context_menu();
+    draw_toasts();
     mouse_state_t ms; mouse_get_state(&ms);
     draw_cursor(ms.x, ms.y);
     vga_flip();
@@ -1610,6 +1821,8 @@ static void draw_desktop(void) {
 void desktop_run(void) {
     serial_write("desktop_run: start\n"); screen_set_serial_mirror(0xFF000000);
     memset(windows,0,sizeof(windows)); win_count=0; win_focus=-1; win_order_count=0; kickoff_open=0; dragging=0; wp_cached=0;
+    memset(toasts, 0, sizeof(toasts));
+    audit_log(AUDIT_SYSTEM, "Desktop started");
     open_window(WIN_ABOUT); open_window(WIN_TERM);
     draw_desktop();
     uint32_t last_draw=0; int needs_redraw=1;

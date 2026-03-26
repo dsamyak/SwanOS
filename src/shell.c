@@ -19,6 +19,7 @@
 #include "game.h"
 #include "ports.h"
 #include "process.h"
+#include "audit.h"
 
 #define CMD_BUF 256
 #define OUT_BUF 4096
@@ -335,6 +336,8 @@ static void cmd_help(void) {
     print_help_section("SYSTEM", VGA_LIGHT_MAGENTA);
     print_help_entry("help", "This reference");
     print_help_entry("whoami", "Current user");
+    print_help_entry("profile", "User profile & stats");
+    print_help_entry("audit", "View audit log");
     print_help_entry("status", "System info");
     print_help_entry("date", "Date & time");
     print_help_entry("mem", "Memory usage");
@@ -582,6 +585,7 @@ static int execute_command(char *input) {
             screen_print(" Written: ");
             screen_print(arg);
             screen_print("\n");
+            audit_log(AUDIT_FILE_WRITE, arg);
         } else {
             screen_set_color(VGA_RED, VGA_BLACK);
             screen_print("   ");
@@ -741,6 +745,7 @@ static int execute_command(char *input) {
             screen_print(" Created: ");
             screen_print(arg);
             screen_print("\n");
+            audit_log(AUDIT_FILE_CREATE, arg);
         } else {
             screen_set_color(VGA_RED, VGA_BLACK);
             screen_print("   ");
@@ -771,6 +776,7 @@ static int execute_command(char *input) {
             screen_print(" Deleted: ");
             screen_print(arg);
             screen_print("\n");
+            audit_log(AUDIT_FILE_DELETE, arg);
         } else if (r == -2) {
             screen_set_color(VGA_RED, VGA_BLACK);
             screen_print("   ");
@@ -1176,8 +1182,210 @@ static int execute_command(char *input) {
         return 0;
     }
 
+    /* ── Audit ── */
+    if (strcmp(cmd, "audit") == 0) {
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_print("\n   ");
+        screen_putchar((char)201);
+        for (int i = 0; i < 54; i++) screen_putchar((char)205);
+        screen_putchar((char)187);
+        screen_print("\n   ");
+        screen_putchar((char)186);
+        screen_set_color(VGA_CYAN, VGA_BLACK);
+        screen_print("  ");
+        screen_putchar((char)254);
+        screen_print(" Audit Log");
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_print("                                         ");
+        screen_putchar((char)186);
+        screen_print("\n   ");
+        screen_putchar((char)200);
+        for (int i = 0; i < 54; i++) screen_putchar((char)205);
+        screen_putchar((char)188);
+        screen_print("\n");
+
+        int cnt = audit_get_count();
+        if (cnt == 0) {
+            screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+            screen_print("   No audit events recorded.\n");
+        } else {
+            int show = cnt > 10 ? 10 : cnt;
+            int total_avail = cnt > AUDIT_MAX_ENTRIES ? AUDIT_MAX_ENTRIES : cnt;
+            int start_idx = total_avail - show;
+            for (int i = start_idx; i < total_avail; i++) {
+                const audit_entry_t *e = audit_get_entry(i);
+                if (!e || !e->used) continue;
+                screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+                screen_print("   ");
+                char tmp[8];
+                screen_print("[");
+                if (e->hour < 10) screen_putchar('0');
+                itoa(e->hour, tmp, 10); screen_print(tmp);
+                screen_putchar(':');
+                if (e->minute < 10) screen_putchar('0');
+                itoa(e->minute, tmp, 10); screen_print(tmp);
+                screen_putchar(':');
+                if (e->second < 10) screen_putchar('0');
+                itoa(e->second, tmp, 10); screen_print(tmp);
+                screen_print("] ");
+
+                /* Color by event type */
+                uint8_t ec = VGA_WHITE;
+                switch (e->type) {
+                    case AUDIT_LOGIN:       ec = VGA_GREEN; break;
+                    case AUDIT_LOGOUT:      ec = VGA_YELLOW; break;
+                    case AUDIT_FILE_CREATE: ec = VGA_LIGHT_CYAN; break;
+                    case AUDIT_FILE_DELETE: ec = VGA_RED; break;
+                    case AUDIT_APP_OPEN:    ec = VGA_CYAN; break;
+                    case AUDIT_APP_CLOSE:   ec = VGA_DARK_GREY; break;
+                    case AUDIT_COMMAND:     ec = VGA_WHITE; break;
+                    case AUDIT_FILE_WRITE:  ec = VGA_LIGHT_GREEN; break;
+                    case AUDIT_SYSTEM:      ec = VGA_LIGHT_MAGENTA; break;
+                }
+                screen_set_color(ec, VGA_BLACK);
+                screen_print(audit_type_name(e->type));
+                screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+                screen_print(" ");
+                screen_set_color(VGA_GREEN, VGA_BLACK);
+                screen_print(e->user);
+                if (e->detail[0]) {
+                    screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+                    screen_print(": ");
+                    screen_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+                    screen_print(e->detail);
+                }
+                screen_print("\n");
+            }
+            screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+            screen_print("\n   Total events: ");
+            char tcnt[8]; itoa(cnt, tcnt, 10);
+            screen_print(tcnt);
+            screen_print("\n");
+        }
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_print("\n");
+        return 0;
+    }
+
+    /* ── Profile ── */
+    if (strcmp(cmd, "profile") == 0) {
+        user_profile_t *p = user_get_profile();
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_print("\n   ");
+        screen_putchar((char)201);
+        for (int i = 0; i < 44; i++) screen_putchar((char)205);
+        screen_putchar((char)187);
+        screen_print("\n   ");
+        screen_putchar((char)186);
+        screen_set_color(VGA_CYAN, VGA_BLACK);
+        screen_print("  ");
+        screen_putchar((char)4);
+        screen_print(" User Profile");
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_print("                             ");
+        screen_putchar((char)186);
+        screen_print("\n   ");
+        screen_putchar((char)204);
+        for (int i = 0; i < 44; i++) screen_putchar((char)205);
+        screen_putchar((char)185);
+
+        /* Username */
+        screen_print("\n   ");
+        screen_putchar((char)186);
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_print("  Name     : ");
+        screen_set_color(VGA_GREEN, VGA_BLACK);
+        screen_print(user_current());
+        int upad = 29 - (int)strlen(user_current());
+        for (int i = 0; i < upad; i++) screen_putchar(' ');
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_putchar((char)186);
+
+        /* Login count */
+        screen_print("\n   ");
+        screen_putchar((char)186);
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_print("  Logins   : ");
+        screen_set_color(VGA_YELLOW, VGA_BLACK);
+        char lc[8]; itoa(p->login_count, lc, 10);
+        screen_print(lc);
+        int lpad = 29 - (int)strlen(lc);
+        for (int i = 0; i < lpad; i++) screen_putchar(' ');
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_putchar((char)186);
+
+        /* Last login */
+        screen_print("\n   ");
+        screen_putchar((char)186);
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_print("  Last     : ");
+        if (p->last_day > 0) {
+            char lt[24]; char tmp[8];
+            lt[0] = '\0';
+            itoa(p->last_day, tmp, 10); strcat(lt, tmp); strcat(lt, "/");
+            itoa(p->last_month, tmp, 10); strcat(lt, tmp); strcat(lt, " ");
+            if (p->last_hour < 10) strcat(lt, "0");
+            itoa(p->last_hour, tmp, 10); strcat(lt, tmp); strcat(lt, ":");
+            if (p->last_minute < 10) strcat(lt, "0");
+            itoa(p->last_minute, tmp, 10); strcat(lt, tmp);
+            screen_print(lt);
+            int lpad2 = 29 - (int)strlen(lt);
+            for (int i = 0; i < lpad2; i++) screen_putchar(' ');
+        } else {
+            screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+            screen_print("First login                  ");
+        }
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_putchar((char)186);
+
+        /* Session duration */
+        screen_print("\n   ");
+        screen_putchar((char)186);
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_print("  Session  : ");
+        {
+            uint32_t ss = user_session_seconds();
+            uint32_t sm = ss / 60; uint32_t sh = sm / 60;
+            ss %= 60; sm %= 60;
+            char sb[24]; char tmp[8];
+            sb[0] = '\0';
+            itoa(sh, tmp, 10); strcat(sb, tmp); strcat(sb, "h ");
+            itoa(sm, tmp, 10); strcat(sb, tmp); strcat(sb, "m ");
+            itoa(ss, tmp, 10); strcat(sb, tmp); strcat(sb, "s");
+            screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+            screen_print(sb);
+            int spad = 29 - (int)strlen(sb);
+            for (int i = 0; i < spad; i++) screen_putchar(' ');
+        }
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_putchar((char)186);
+
+        /* Home directory */
+        screen_print("\n   ");
+        screen_putchar((char)186);
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        screen_print("  Home     : ");
+        screen_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+        char hdir[32]; strcpy(hdir, "/home/"); strcat(hdir, user_current());
+        screen_print(hdir);
+        int hpad = 29 - (int)strlen(hdir);
+        for (int i = 0; i < hpad; i++) screen_putchar(' ');
+        screen_set_color(VGA_DARK_GREY, VGA_BLACK);
+        screen_putchar((char)186);
+
+        /* Bottom */
+        screen_print("\n   ");
+        screen_putchar((char)200);
+        for (int i = 0; i < 44; i++) screen_putchar((char)205);
+        screen_putchar((char)188);
+        screen_print("\n\n");
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        return 0;
+    }
+
     /* ── Login ── */
     if (strcmp(cmd, "login") == 0) {
+        audit_log(AUDIT_LOGOUT, user_current());
         return -3;
     }
 
