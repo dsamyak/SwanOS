@@ -1,0 +1,6 @@
+ld -m elf_i386 -T linker.ld -nostdlib -o swanos.bin src/boot.o src/gdt_asm.o src/idt_asm.o src/paging_asm.o src/desktop.o src/fs.o src/game.o src/gdt.o src/idt.o src/kernel.o src/kernel_ai.o src/keyboard.o src/llm.o src/memory.o src/mouse.o src/network.o src/paging.o src/process.o src/rtc.o src/screen.o src/serial.o src/shell.o src/string.o src/syscall.o src/timer.o src/user.o src/vga_gfx.o src/cxxabi.o src/ui_theme.o
+ld: warning: src/paging_asm.o: missing .note.GNU-stack section implies executable stack
+ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+ld: src/desktop.o: in function `draw_desktop':
+desktop.c:(.text+0x4b9f): undefined reference to `vga_bb_draw_string_3x'
+make: *** [Makefile:51: swanos.bin] Error 1

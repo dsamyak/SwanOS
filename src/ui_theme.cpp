@@ -538,6 +538,137 @@ void ui_render_aurora_wallpaper(uint32_t *buf, int w, int h) {
 
 
 /* ═══════════════════════════════════════════════════════════════
+ *  Animated Aurora Wallpaper
+ * ═══════════════════════════════════════════════════════════════ */
+
+extern "C"
+void ui_render_aurora_wallpaper_animated(uint32_t *buf, int w, int h, uint32_t phase) {
+    /* 3-stop vertical gradient base */
+    int half = h / 2;
+    if (half <= 0) half = 1;
+
+    for (int y = 0; y < h; y++) {
+        uint32_t c;
+        if (y < half) {
+            c = lerp(W_TOP, W_MID, y, half);
+        } else {
+            c = lerp(W_MID, W_BOT, y - half, h - half);
+        }
+        uint32_t *row = &buf[y * w];
+        for (int x = 0; x < w; x++)
+            row[x] = c;
+    }
+
+    /* Compute animated offsets based on phase (triangle waves) */
+    int t1 = (phase >> 1) % 512; if (t1 > 255) t1 = 511 - t1;
+    int t2 = (phase >> 2) % 512; if (t2 > 255) t2 = 511 - t2;
+    int t3 = (phase + 128) % 512; if (t3 > 255) t3 = 511 - t3;
+    
+    int ox1 = (t1 - 128) * w / 2048; /* drift X */
+    int oy1 = (t2 - 128) * h / 2048;
+    int ox2 = (t3 - 128) * w / 2048;
+    int oy2 = (t1 - 128) * h / 2048;
+
+    /* Primary aurora */
+    int gcx = w / 2 + ox1;
+    int gcy = h / 3 + oy1;
+    int max_r2 = (w * w) / 5 + (h * h) / 7;
+    for (int y = 0; y < h; y++) {
+        uint32_t *row = &buf[y * w];
+        int dy = y - gcy;
+        int dy2 = dy * dy;
+        for (int x = 0; x < w; x++) {
+            int dx = x - gcx;
+            int dist2 = (dx * dx) / 3 + dy2;
+            if (dist2 < max_r2) {
+                int intensity = 28 - (dist2 * 28) / max_r2;
+                if (intensity > 0) {
+                    RGBA bg(row[x]);
+                    bg.r = clamp((int)bg.r + intensity / 3 + t1/30, 0, 255);
+                    bg.g = clamp((int)bg.g + intensity * 5 / 2, 0, 255);
+                    bg.b = clamp((int)bg.b + intensity * 2, 0, 255);
+                    row[x] = bg.pack();
+                }
+            }
+        }
+    }
+
+    /* Secondary aurora */
+    int g2x = w * 3 / 4 - ox2;
+    int g2y = h / 4 + oy2;
+    int max2_r2 = (w * w) / 9 + (h * h) / 11;
+    for (int y = 0; y < h; y++) {
+        uint32_t *row = &buf[y * w];
+        int dy = y - g2y;
+        int dy2 = dy * dy;
+        for (int x = 0; x < w; x++) {
+            int dx = x - g2x;
+            int dist2 = (dx * dx) / 3 + dy2;
+            if (dist2 < max2_r2) {
+                int intensity = 18 - (dist2 * 18) / max2_r2;
+                if (intensity > 0) {
+                    RGBA bg(row[x]);
+                    bg.r = clamp((int)bg.r + intensity * 3, 0, 255);
+                    bg.g = clamp((int)bg.g + intensity / 4 + t2/40, 0, 255);
+                    bg.b = clamp((int)bg.b + intensity * 2, 0, 255);
+                    row[x] = bg.pack();
+                }
+            }
+        }
+    }
+
+    /* Tertiary aurora */
+    int g3x = w / 4 + ox2;
+    int g3y = h * 2 / 3 - oy1;
+    int max3_r2 = (w * w) / 12 + (h * h) / 14;
+    for (int y = 0; y < h; y++) {
+        uint32_t *row = &buf[y * w];
+        int dy = y - g3y;
+        int dy2 = dy * dy;
+        for (int x = 0; x < w; x++) {
+            int dx = x - g3x;
+            int dist2 = (dx * dx) / 2 + dy2;
+            if (dist2 < max3_r2) {
+                int intensity = 12 - (dist2 * 12) / max3_r2;
+                if (intensity > 0) {
+                    RGBA bg(row[x]);
+                    bg.r = clamp((int)bg.r + intensity / 3, 0, 255);
+                    bg.g = clamp((int)bg.g + intensity * 2, 0, 255);
+                    bg.b = clamp((int)bg.b + intensity + t3/40, 0, 255);
+                    row[x] = bg.pack();
+                }
+            }
+        }
+    }
+
+    /* Stars */
+    uint32_t seed = 0xC0FFEE42;
+    for (int i = 0; i < 120; i++) {
+        seed = seed * 1103515245 + 12345; int sx = (seed >> 16) % w;
+        seed = seed * 1103515245 + 12345; int sy = (seed >> 16) % h;
+        seed = seed * 1103515245 + 12345; int brightness = 170 + (seed >> 16) % 85;
+        
+        int twinkle = (sx * 7 + sy * 13 + phase) % 256;
+        if (twinkle > 128) twinkle = 256 - twinkle;
+        brightness = clamp(brightness - 40 + twinkle/3, 0, 255);
+
+        int sr = clamp(brightness - 20 + (int)((seed >> 8) & 0x1F), 0, 255);
+        int sg = clamp(brightness - 10, 0, 255);
+        int sb = clamp(brightness + 10, 0, 255);
+        uint32_t star = (0xFF000000) | (sr << 16) | (sg << 8) | sb;
+        buf[sy * w + sx] = star;
+        if (i < 25 && sx + 1 < w) {
+            uint32_t dim = (0xFF000000) | ((sr / 2) << 16) | ((sg / 2) << 8) | (sb / 2);
+            buf[sy * w + sx + 1] = dim;
+            if (sy + 1 < h) buf[(sy + 1) * w + sx] = dim;
+            if (sx > 0) buf[sy * w + sx - 1] = dim;
+            if (sy > 0) buf[(sy - 1) * w + sx] = dim;
+        }
+    }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
  *  Tray Icon Background with Hover Glow
  * ═══════════════════════════════════════════════════════════════ */
 

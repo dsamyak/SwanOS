@@ -113,6 +113,7 @@ typedef struct {
     int store_sel;
     int store_downloaded[6];
     int browser_tab;
+    int workspace;
 } window_t;
 
 static window_t windows[MAX_WINDOWS];
@@ -135,9 +136,15 @@ static const char *ko_labels[KO_ITEMS] = {
 };
 static int ko_ids[KO_ITEMS] = {WIN_AI,WIN_TERM,WIN_FILES,WIN_NOTES,WIN_CALC,WIN_SYSMON,WIN_ABOUT,WIN_STORE,WIN_BROWSER,WIN_NETWORK,-1,-2};
 
+/* ── Workspace ────────────────────────────────────────────── */
+#define MAX_WORKSPACES 3
+static int current_workspace = 0;
+
 /* ── Wallpaper cache ──────────────────────────────────────── */
 static int wp_cached = 0;
 static uint32_t wp_buf[1920 * 1080];
+static uint32_t wp_phase = 0;
+static uint32_t wp_last_tick = 0;
 
 /* ── Forward declarations ─────────────────────────────────── */
 static void open_window(int type);
@@ -149,7 +156,7 @@ static void term_process_cmd(window_t *w);
 /* ── Wallpaper ────────────────────────────────────────────── */
 static void render_wallpaper(void) {
     /* Render full screen height so wallpaper shows through dock transparency */
-    ui_render_aurora_wallpaper(wp_buf, GFX_W, GFX_H);
+    ui_render_aurora_wallpaper_animated(wp_buf, GFX_W, GFX_H, wp_phase);
     wp_cached = 1;
 }
 
@@ -1313,9 +1320,9 @@ static void close_window(int wi) {
 }
 
 static void open_window(int type) {
-    for (int i=0;i<MAX_WINDOWS;i++) { if (windows[i].active && windows[i].type==type) { bring_to_front(i); return; } }
+    for (int i=0;i<MAX_WINDOWS;i++) { if (windows[i].active && windows[i].type==type && windows[i].workspace==current_workspace) { bring_to_front(i); return; } }
     int wi=find_free_window(); if (wi<0) return;
-    window_t *w=&windows[wi]; memset(w,0,sizeof(window_t)); w->active=1; w->type=type;
+    window_t *w=&windows[wi]; memset(w,0,sizeof(window_t)); w->active=1; w->type=type; w->workspace=current_workspace;
     switch (type) {
         case WIN_TERM: strcpy(w->title,"Console"); w->x=280;w->y=120;w->w=820;w->h=520;
             term_add_line(w,"SwanOS Terminal"); term_add_line(w,"Type 'help'"); break;
@@ -1383,6 +1390,19 @@ static int handle_click(int mx, int my) {
         }
         ctx_menu_open = 0; return 0;
     }
+    /* Workspace indicator clicks (top-left) */
+    if (my >= 40 && my < 80 && mx >= 40 && mx < 200) {
+        int idx = (mx - 40) / 53;
+        if (idx >= 0 && idx < MAX_WORKSPACES && idx != current_workspace) {
+            current_workspace = idx;
+            win_focus = -1;
+            for (int zi = win_order_count-1; zi >= 0; zi--) {
+                int wi = win_order[zi];
+                if (windows[wi].active && windows[wi].workspace == current_workspace) { win_focus = wi; break; }
+            }
+            return 0;
+        }
+    }
     if (kickoff_open) {
         int mx_top = dock_y - KO_H - 12;
         int mx_left = kickoff_x;
@@ -1431,7 +1451,7 @@ static int handle_click(int mx, int my) {
     if (quick_settings_open) { quick_settings_open=0; }
     /* Windows (top z first) */
     for (int zi=win_order_count-1;zi>=0;zi--) {
-        int wi=win_order[zi]; window_t *w=&windows[wi]; if(!w->active) continue;
+        int wi=win_order[zi]; window_t *w=&windows[wi]; if(!w->active || w->workspace != current_workspace) continue;
         if (mx>=w->x&&mx<w->x+w->w&&my>=w->y&&my<w->y+w->h) {
             bring_to_front(wi);
             /* Close button check */
@@ -1532,14 +1552,51 @@ static int handle_click(int mx, int my) {
     kickoff_open=0; return 0;
 }
 
+/* ── Widgets ──────────────────────────────────────────────── */
+static void draw_widgets(void) {
+    /* Clock Widget */
+    int cx = SCRW - 180, cy = 40;
+    ui_card(cx, cy, 160, 160, 12, 0x35FFFFFF);
+    ui_neon_border(cx, cy, 160, 160, 12, S_NEON_CYAN);
+    vga_bb_fill_circle(cx+80, cy+80, 60, S_BG_DARK);
+    vga_bb_draw_circle(cx+80, cy+80, 60, S_NEON_CYAN);
+    rtc_time_t t; rtc_read(&t);
+    char tbuf[16]; rtc_format_time(&t, tbuf);
+    vga_bb_draw_string_2x(cx+26, cy+68, tbuf, S_TEXT, 0);
+
+    /* Stats Widget */
+    int sx = SCRW - 180, sy = 220;
+    ui_card(sx, sy, 160, 120, 12, 0x35FFFFFF);
+    ui_neon_border(sx, sy, 160, 120, 12, S_NEON_PURPLE);
+    vga_bb_draw_string_2x(sx+16, sy+16, "SYSTEM", S_TEXT, 0);
+    int pct = (mem_total() > 0) ? (mem_used() * 100) / mem_total() : 0;
+    vga_bb_draw_string(sx+16, sy+40, "Memory", S_TEXT_DIM, 0);
+    ui_progress_bar(sx+16, sy+56, 128, 12, pct, 100, S_NEON_PURPLE, S_BG_DEEP);
+    char mbuf[32]; strcpy(mbuf, "Used: "); char nb[10]; itoa(mem_used()/1024, nb, 10); strcat(mbuf, nb); strcat(mbuf, " KB");
+    vga_bb_draw_string(sx+16, sy+76, mbuf, S_TEXT, 0);
+}
+
+static void draw_workspace_indicator(void) {
+    int wx = 40, wy = 40;
+    ui_glass_panel(wx, wy, 160, 40, 20, 0x40FFFFFF, S_BORDER);
+    for (int i=0; i<3; i++) {
+        int px = wx + 30 + i*50;
+        int py = wy + 20;
+        uint32_t c = (i == current_workspace) ? S_NEON_CYAN : S_TEXT_DIM;
+        vga_bb_fill_circle(px, py, (i == current_workspace) ? 8 : 5, c);
+    }
+}
+
 /* ── Full desktop draw ────────────────────────────────────── */
 static void draw_desktop(void) {
     draw_wallpaper();
     draw_icons();
+    draw_workspace_indicator();
+    draw_widgets();
     /* Only draw active windows to save cycles */
     for (int i = 0; i < win_order_count; i++) {
         int wi = win_order[i];
-        if (windows[wi].active) draw_window(wi);
+        if (windows[wi].active && windows[wi].workspace == current_workspace) draw_window(wi);
     }
     draw_panel();
     draw_kickoff();
@@ -1636,6 +1693,14 @@ void desktop_run(void) {
             }
         }
         uint32_t ticks=timer_get_ticks();
+        /* Animated wallpaper periodic refresh */
+        if (ticks - wp_last_tick > 150) {
+            wp_phase += 16;
+            wp_cached = 0;
+            wp_last_tick = ticks;
+            needs_redraw = 1;
+        }
+
         /* Sysmon history update (every 1 second roughly = 100 ticks at 100Hz) */
         if (ticks - sysmon_tick > 100) {
             for (int i=0; i<MAX_WINDOWS; i++) {

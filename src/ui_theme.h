@@ -119,6 +119,9 @@ void ui_label_pair(int x, int y, const char *key, const char *value,
 /* Render the aurora wallpaper into a buffer */
 void ui_render_aurora_wallpaper(uint32_t *buf, int w, int h);
 
+/* Render the animated aurora wallpaper with a time phase */
+void ui_render_aurora_wallpaper_animated(uint32_t *buf, int w, int h, uint32_t phase);
+
 /* Window soft shadow (multiple offset blurred layers) */
 void ui_window_shadow(int x, int y, int w, int h);
 
