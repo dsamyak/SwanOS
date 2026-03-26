@@ -358,6 +358,30 @@ static int tray_drag_active = 0;     /* currently dragging a tray slot */
 static int tray_drag_slot = -1;      /* which slot is being dragged */
 static int tray_slot_order[5] = {0,1,2,3,4}; /* MEM, NET, VOL, BAT, BELL */
 
+/* Dock Animation State */
+static uint32_t dock_anim_tick = 0;
+
+/* Simple sine approximation (0-360 input, returns -100..100) */
+static int sine_approx(int deg) {
+    deg = deg % 360;
+    if (deg < 0) deg += 360;
+    if (deg <= 90) return (deg * 100) / 90;
+    if (deg <= 180) return ((180 - deg) * 100) / 90;
+    if (deg <= 270) return -((deg - 180) * 100) / 90;
+    return -((360 - deg) * 100) / 90;
+}
+
+/* Animated rainbow color from phase offset */
+static uint32_t rainbow_color(int phase) {
+    phase = phase % 768;
+    if (phase < 0) phase += 768;
+    uint8_t r, g, b;
+    if (phase < 256)      { r = 255 - phase; g = phase; b = 0; }
+    else if (phase < 512) { r = 0; g = 511 - phase; b = phase - 256; }
+    else                  { r = phase - 512; g = 0; b = 767 - phase; }
+    return 0xFF000000 | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+}
+
 static void draw_panel(void) {
     /* Calculate required dock width */
     int wins_w = 0;
@@ -370,14 +394,64 @@ static void draw_panel(void) {
     }
 
     dock_w = 64 + 16 + wins_w + 520;
-    if (dock_w > SCRW - 20) dock_w = SCRW - 20;
+    if (dock_w > SCRW - 40) dock_w = SCRW - 40;
     dock_x = (SCRW - dock_w) / 2;
-    dock_y = SCRH - PANEL_H - 16;  /* Extra floating gap */
 
-    /* ── Dock Background: frosted panel + neon border ── */
-    ui_soft_shadow(dock_x, dock_y, dock_w, PANEL_H, 18, 5);
-    ui_frosted_panel(dock_x, dock_y, dock_w, PANEL_H, 16, B_PANEL, S_GLASS_BORDER);
-    ui_neon_border(dock_x, dock_y, dock_w, PANEL_H, 16, S_NEON_CYAN);
+    /* Animated floating bob — subtle 3px oscillation */
+    dock_anim_tick = timer_get_ticks();
+    int bob_offset = (sine_approx((dock_anim_tick * 3) % 360) * 3) / 100;
+    dock_y = SCRH - PANEL_H - 24 + bob_offset;  /* Larger floating gap */
+
+    /* ── Dock Background: ultra-transparent frosted panel ── */
+    /* Multi-layer soft shadow for floating depth */
+    ui_soft_shadow(dock_x, dock_y, dock_w, PANEL_H, 22, 7);
+
+    /* Glass panel with deeper transparency */
+    vga_bb_fill_rounded_rect(dock_x, dock_y, dock_w, PANEL_H, 18, 0x40081020);
+    /* Secondary frosted glass layer */
+    vga_bb_fill_rounded_rect(dock_x+1, dock_y+1, dock_w-2, PANEL_H-2, 17, 0x18FFFFFF);
+    /* Inner highlight reflection strip (top edge) */
+    vga_bb_fill_rounded_rect(dock_x+4, dock_y+2, dock_w-8, 2, 1, 0x15FFFFFF);
+
+    /* Animated rainbow neon border */
+    int phase = (dock_anim_tick * 4) % 768;
+    uint32_t neon1 = rainbow_color(phase);
+    uint32_t neon2 = rainbow_color(phase + 256);
+    /* Top edge — gradient from left to right */
+    for (int px = 0; px < dock_w; px++) {
+        int t = (px * 256) / dock_w;
+        uint8_t r1 = (neon1 >> 16) & 0xFF, g1 = (neon1 >> 8) & 0xFF, b1 = neon1 & 0xFF;
+        uint8_t r2 = (neon2 >> 16) & 0xFF, g2 = (neon2 >> 8) & 0xFF, b2 = neon2 & 0xFF;
+        uint8_t r = r1 + ((r2 - r1) * t) / 256;
+        uint8_t g = g1 + ((g2 - g1) * t) / 256;
+        uint8_t b = b1 + ((b2 - b1) * t) / 256;
+        uint32_t c = 0xC0000000 | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+        int x = dock_x + px;
+        if (x >= 0 && x < SCRW) {
+            vga_bb_putpixel(x, dock_y, c);
+            vga_bb_putpixel(x, dock_y + PANEL_H - 1, c);
+        }
+    }
+    /* Side edges */
+    for (int py = 0; py < PANEL_H; py++) {
+        int t = (py * 256) / PANEL_H;
+        uint8_t r1 = (neon1 >> 16) & 0xFF, g1 = (neon1 >> 8) & 0xFF, b1 = neon1 & 0xFF;
+        uint8_t r2 = (neon2 >> 16) & 0xFF, g2 = (neon2 >> 8) & 0xFF, b2 = neon2 & 0xFF;
+        uint8_t r = r1 + ((r2 - r1) * t) / 256;
+        uint8_t g = g1 + ((g2 - g1) * t) / 256;
+        uint8_t b = b1 + ((b2 - b1) * t) / 256;
+        uint32_t c = 0xC0000000 | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+        int y = dock_y + py;
+        if (y >= 0 && y < SCRH) {
+            vga_bb_putpixel(dock_x, y, c);
+            vga_bb_putpixel(dock_x + dock_w - 1, y, c);
+        }
+    }
+    /* Outer glow halo (2 layers) */
+    uint32_t glow1 = (0x18 << 24) | (neon1 & 0x00FFFFFF);
+    uint32_t glow2 = (0x08 << 24) | (neon2 & 0x00FFFFFF);
+    vga_bb_draw_rect_outline(dock_x-1, dock_y-1, dock_w+2, PANEL_H+2, glow1);
+    vga_bb_draw_rect_outline(dock_x-2, dock_y-2, dock_w+4, PANEL_H+4, glow2);
 
     mouse_state_t ms; mouse_get_state(&ms);
     const int msx = ms.x, msy = ms.y;
@@ -424,14 +498,6 @@ static void draw_panel(void) {
         if (bw > 200) bw = 200;
         int thover = (msx >= bx && msx < bx+bw && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
 
-        if (focused) {
-            vga_bb_fill_rounded_rect(bx, dock_y+6, bw, PANEL_H-12, 10, S_BG_HOVER);
-            vga_bb_fill_rounded_rect_gradient(bx+4, dock_y+PANEL_H-8, bw-8, 3, 1, S_NEON_CYAN, S_NEON_PURPLE);
-            vga_bb_draw_hline(bx+10, dock_y+7, bw-20, 0x10FFFFFF);
-        } else if (thover) {
-            vga_bb_fill_rounded_rect(bx, dock_y+6, bw, PANEL_H-12, 10, S_BG_ALT);
-        }
-
         /* Colored mini-icon dot with neon glow */
         uint32_t dot_c = S_ACCENT;
         if (windows[wi].type == WIN_AI) dot_c = S_NEON_PURPLE;
@@ -442,6 +508,24 @@ static void draw_panel(void) {
         else if (windows[wi].type == WIN_CALC) dot_c = S_PINK;
         else if (windows[wi].type == WIN_SYSMON) dot_c = S_RED;
         else if (windows[wi].type == WIN_STORE) dot_c = S_GREEN;
+        else if (windows[wi].type == WIN_AUDIT) dot_c = S_NEON_MAGENTA;
+
+        if (focused) {
+            /* Pulsing neon glow behind focused button */
+            int pulse_alpha = 0x20 + (sine_approx((dock_anim_tick * 5) % 360) * 0x10) / 100;
+            if (pulse_alpha < 0x10) pulse_alpha = 0x10;
+            uint32_t pulse_color = ((uint32_t)pulse_alpha << 24) | (dot_c & 0x00FFFFFF);
+            vga_bb_fill_rounded_rect(bx-2, dock_y+5, bw+4, PANEL_H-10, 12, pulse_color);
+            vga_bb_fill_rounded_rect(bx, dock_y+6, bw, PANEL_H-12, 10, S_BG_HOVER);
+            /* Animated gradient underline */
+            int uline_phase = (dock_anim_tick * 6 + bx) % 768;
+            uint32_t uc1 = rainbow_color(uline_phase);
+            uint32_t uc2 = rainbow_color(uline_phase + 384);
+            vga_bb_fill_rounded_rect_gradient(bx+4, dock_y+PANEL_H-8, bw-8, 3, 1, uc1, uc2);
+            vga_bb_draw_hline(bx+10, dock_y+7, bw-20, 0x15FFFFFF);
+        } else if (thover) {
+            vga_bb_fill_rounded_rect(bx, dock_y+6, bw, PANEL_H-12, 10, 0x18FFFFFF);
+        }
 
         if (focused)
             vga_bb_fill_circle_alpha(bx+12, dock_y+PANEL_H/2, 8, (0x30 << 24) | (dot_c & 0x00FFFFFF));
@@ -603,17 +687,20 @@ static void draw_panel(void) {
         int bcx = tx + bell_w/2, bcy = dock_y + PANEL_H/2 - 2;
         if (notification_count > 0)
             vga_bb_fill_circle_alpha(bcx, bcy, 14, 0x18FBB724);
-        vga_bb_fill_circle(bcx, bcy-2, 8, S_YELLOW);
-        vga_bb_fill_rect(bcx-8, bcy+2, 16, 5, S_YELLOW);
-        vga_bb_fill_rounded_rect(bcx-10, bcy+7, 20, 3, 1, S_YELLOW);
-        vga_bb_fill_circle(bcx, bcy+12, 2, S_YELLOW);
+        /* Animated bell swing */
+        int bell_swing = sine_approx((dock_anim_tick * 8) % 360);
+        int bsx = bcx + (bell_swing * 2) / 100;
+        vga_bb_fill_circle(bsx, bcy-2, 8, S_YELLOW);
+        vga_bb_fill_rect(bsx-8, bcy+2, 16, 5, S_YELLOW);
+        vga_bb_fill_rounded_rect(bsx-10, bcy+7, 20, 3, 1, S_YELLOW);
+        vga_bb_fill_circle(bsx, bcy+12, 2, S_YELLOW);
 
         if (notification_count > 0) {
-            vga_bb_fill_circle_alpha(bcx+10, bcy-8, 10, 0x25FF6B8A);
-            vga_bb_fill_circle(bcx+10, bcy-8, 8, S_RED);
-            vga_bb_fill_circle(bcx+10, bcy-8, 6, 0xFFFF6B6B);
+            vga_bb_fill_circle_alpha(bsx+10, bcy-8, 10, 0x25FF6B8A);
+            vga_bb_fill_circle(bsx+10, bcy-8, 8, S_RED);
+            vga_bb_fill_circle(bsx+10, bcy-8, 6, 0xFFFF6B6B);
             char nc_str[4]; itoa(notification_count, nc_str, 10);
-            vga_bb_draw_string(bcx+7, bcy-12, nc_str, 0xFFFFFFFF, 0x00000000);
+            vga_bb_draw_string(bsx+7, bcy-12, nc_str, 0xFFFFFFFF, 0x00000000);
         }
 
         if (bell_hover && !rearrange_mode) {
@@ -642,9 +729,12 @@ static void draw_panel(void) {
         vga_bb_draw_string_2x(clk_x+1, dock_y+7, clk, 0x25000000, 0x00000000);
         vga_bb_draw_string_2x(clk_x, dock_y+6, clk, S_TEXT, 0x00000000);
 
-        /* Neon colon pulse — subtle accent on the ":" */
-        vga_bb_fill_circle(clk_x + 2*CW + CW/2, dock_y+12, 2, S_NEON_CYAN);
-        vga_bb_fill_circle(clk_x + 2*CW + CW/2, dock_y+20, 2, S_NEON_CYAN);
+        /* Animated neon colon pulse */
+        int colon_alpha = 0x80 + (sine_approx((dock_anim_tick * 10) % 360) * 0x60) / 100;
+        if (colon_alpha < 0x20) colon_alpha = 0x20;
+        uint32_t colon_c = ((uint32_t)colon_alpha << 24) | (S_NEON_CYAN & 0x00FFFFFF);
+        vga_bb_fill_circle(clk_x + 2*CW + CW/2, dock_y+12, 2, colon_c);
+        vga_bb_fill_circle(clk_x + 2*CW + CW/2, dock_y+20, 2, colon_c);
 
         char wday[4]; rtc_format_weekday(&rtc, wday);
         char dateline[24];
