@@ -5,6 +5,7 @@
 #include "idt.h"
 #include "kernel_ai.h"
 #include "screen.h"
+#include "fs.h"
 
 extern page_directory_t *current_dir;
 int yield_requested = 0;
@@ -168,4 +169,71 @@ int process_ipc_recv(uint32_t *src_pid, void *msg, uint32_t max_len) {
     
     current_process->has_msg = 0;
     return copy_len;
+}
+
+extern page_directory_t *kernel_dir;
+
+int process_exec(const char *filename) {
+    char data[8192]; /* Load up to 8KB for this basic OS */
+    int size = fs_read(filename, data, sizeof(data));
+    if (size <= 0) return -1;
+    
+    int i;
+    for (i = 1; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == 0) break;
+    }
+    if (i == MAX_PROCESSES) return -1;
+    
+    process_t *p = &processes[i];
+    p->pid = next_pid++;
+    p->state = 2; /* ready */
+    
+    p->page_directory = paging_clone_dir(kernel_dir);
+    if (!p->page_directory) {
+        p->state = 0;
+        return -1;
+    }
+    
+    uint32_t virt_start = 0x40000000; /* Map user app at 1 GB */
+    
+    for (int offset = 0; offset < size; offset += 4096) {
+        uint32_t phys = (uint32_t)pmm_alloc_page();
+        if (!phys) { p->state = 0; return -1; }
+        int chunk = size - offset;
+        if (chunk > 4096) chunk = 4096;
+        memcpy((void*)phys, data + offset, chunk);
+        paging_map_page(p->page_directory, phys, virt_start + offset, PAGE_USER | PAGE_RW);
+    }
+    
+    /* Dedicated user stack at 0xB0000000 */
+    uint32_t virt_stack = 0xB0000000;
+    uint32_t phys_stk = (uint32_t)pmm_alloc_page();
+    if (!phys_stk) { p->state = 0; return -1; }
+    paging_map_page(p->page_directory, phys_stk, virt_stack, PAGE_USER | PAGE_RW);
+    
+    uint32_t kernel_stack = (uint32_t)pmm_alloc_page();
+    if (!kernel_stack) { p->state = 0; return -1; }
+    p->kernel_stack = kernel_stack + 4096;
+    
+    uint32_t *stk = (uint32_t *)p->kernel_stack;
+    
+    /* Hardware pushes for iret to Ring 3 */
+    *--stk = 0x23;                   /* User SS */
+    *--stk = virt_stack + 4096 - 4;  /* User ESP */
+    *--stk = 0x202;                  /* EFLAGS (IF set) */
+    *--stk = 0x1B;                   /* User CS */
+    *--stk = virt_start;             /* EIP (Entry point of loaded code) */
+    
+    *--stk = 0; /* Error Code */
+    *--stk = 0; /* Int No */
+    
+    for (int j = 0; j < 8; j++) *--stk = 0; /* pusha */
+    
+    *--stk = 0x23; /* Initial data segment */
+    p->esp = (uint32_t)stk;
+    
+    p->next = current_process->next;
+    current_process->next = p;
+    
+    return p->pid;
 }

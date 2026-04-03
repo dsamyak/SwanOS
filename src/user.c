@@ -20,37 +20,73 @@ static int  user_count = 0;
 static int  current_user = -1;
 static user_profile_t current_profile;
 
+/* ── Internal helper: parse user list from buffer ──────── */
+static void parse_user_list(const char *buf) {
+    const char *p = buf;
+    while (*p && user_count < MAX_USERS) {
+        const char *start = p;
+        while (*p && *p != '\n') p++;
+        int len = (int)(p - start);
+        if (*p == '\n') p++;
+        if (len >= 2 && len < MAX_USERNAME) {
+            /* Avoid duplicates */
+            int dup = 0;
+            for (int i = 0; i < user_count; i++)
+                if (strncmp(users[i], start, len) == 0 && users[i][len] == '\0') { dup = 1; break; }
+            if (!dup) {
+                strncpy(users[user_count], start, len);
+                users[user_count][len] = '\0';
+                /* Create home dir for user */
+                char hdir[64];
+                strcpy(hdir, "/home/");
+                strcat(hdir, users[user_count]);
+                fs_mkdir(hdir);
+                user_count++;
+            }
+        }
+    }
+}
+
+/* ── Save user list to both FS and host bridge ─────────── */
+static void save_user_list(void) {
+    char buf[512];
+    buf[0] = '\0';
+    for (int i = 0; i < user_count; i++) {
+        strcat(buf, users[i]);
+        strcat(buf, "\n");
+    }
+    /* Save to in-memory FS (always available) */
+    fs_write("/etc/users", buf);
+    /* Save to host bridge (may not be running) */
+    llm_host_save("users.txt", buf);
+}
+
 void user_init(void) {
     memset(users, 0, sizeof(users));
     memset(&current_profile, 0, sizeof(current_profile));
     user_count = 0;
     current_user = -1;
 
-    /* Ensure /home exists */
+    /* Ensure dirs exist */
     fs_mkdir("/home");
+    fs_mkdir("/etc");
 
+    /* Try host bridge first */
     char buf[512];
     int r = llm_host_load("users.txt", buf, sizeof(buf));
-    if (r > 0) {
-        char *p = buf;
-        while (*p && user_count < MAX_USERS) {
-            char *start = p;
-            while (*p && *p != '\n') p++;
-            if (*p == '\n') {
-                *p = '\0';
-                p++;
-            }
-            if (strlen(start) >= 2) {
-                strcpy(users[user_count++], start);
-                
-                /* Create home dir for user */
-                char hdir[64];
-                strcpy(hdir, "/home/");
-                strcat(hdir, start);
-                fs_mkdir(hdir);
-            }
-        }
+    if (r > 0 && buf[0] != '\0') {
+        parse_user_list(buf);
     }
+
+    /* Also try in-memory FS (fallback / merge) */
+    char fsbuf[512];
+    int fr = fs_read("/etc/users", fsbuf, sizeof(fsbuf));
+    if (fr >= 0 && fsbuf[0] != '\0') {
+        parse_user_list(fsbuf);
+    }
+
+    /* Sync back so both stores are consistent */
+    if (user_count > 0) save_user_list();
 }
 
 int user_register(const char *username) {
@@ -65,14 +101,8 @@ int user_register(const char *username) {
     strcpy(users[user_count], username);
     user_count++;
 
-    /* Save back to host */
-    char buf[512];
-    buf[0] = '\0';
-    for (int i = 0; i < user_count; i++) {
-        strcat(buf, users[i]);
-        strcat(buf, "\n");
-    }
-    llm_host_save("users.txt", buf);
+    /* Save to both FS and host bridge */
+    save_user_list();
 
     /* Create home dir */
     char hdir[64];
@@ -102,7 +132,16 @@ static void load_user_profile(const char *username) {
     strcat(fname, ".dat");
 
     char buf[128];
+    buf[0] = '\0';
+    /* Try host bridge first */
     int r = llm_host_load(fname, buf, sizeof(buf));
+    /* Fallback to in-memory FS */
+    if (r <= 0 || buf[0] == '\0') {
+        char fspath[48];
+        strcpy(fspath, "/etc/");
+        strcat(fspath, fname);
+        r = fs_read(fspath, buf, sizeof(buf));
+    }
     if (r > 0 && buf[0] != '\0') {
         /* Parse: login_count|last_hour|last_minute|last_day|last_month */
         char *p = buf;
@@ -171,7 +210,26 @@ void user_save_profile(void) {
     itoa(current_profile.last_month, tmp, 10);
     strcat(buf, tmp);
 
+    /* Save to both host bridge and in-memory FS */
     llm_host_save(fname, buf);
+
+    /* Also save to FS as fallback */
+    char fspath[48];
+    strcpy(fspath, "/etc/");
+    strcat(fspath, fname);
+    fs_write(fspath, buf);
+}
+
+/* Called periodically from desktop main loop */
+static uint32_t last_profile_save_tick = 0;
+void user_periodic_save(void) {
+    if (current_user < 0) return;
+    uint32_t now = timer_get_ticks();
+    /* Save every ~60 seconds (6000 ticks at 100Hz) */
+    if (now - last_profile_save_tick > 6000) {
+        user_save_profile();
+        last_profile_save_tick = now;
+    }
 }
 
 uint32_t user_session_seconds(void) {

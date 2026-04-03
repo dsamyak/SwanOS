@@ -20,5 +20,6 @@ void paging_init(void);
 page_directory_t *paging_create_dir(void);
 void paging_switch_dir(page_directory_t *dir);
 void paging_map_page(page_directory_t *dir, uint32_t phys, uint32_t virt, uint32_t flags);
+page_directory_t *paging_clone_dir(page_directory_t *src);
 
 #endif

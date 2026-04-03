@@ -326,6 +326,8 @@ static void cmd_help(void) {
     print_help_entry("mkdir <name>", "Create directory");
     print_help_entry("rm <file>", "Delete file/dir");
     print_help_entry("hexdump <file>", "Hex viewer");
+    print_help_entry("exec <file>", "Run dynamic app");
+    print_help_entry("mkapp <file>", "Create test app");
 
     print_help_section("UTILITIES", VGA_GREEN);
     print_help_entry("calc <expr>", "Calculator");
@@ -1398,6 +1400,96 @@ static int execute_command(char *input) {
         screen_set_color(VGA_WHITE, VGA_BLACK);
         
         process_create(ring3_crash_dummy, 3);
+        return 0;
+    }
+
+    /* ── Exec ── */
+    if (strcmp(cmd, "exec") == 0) {
+        if (arg[0] == '\0') {
+            screen_set_color(VGA_RED, VGA_BLACK);
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Usage: exec <filename>\n");
+            screen_set_color(VGA_WHITE, VGA_BLACK);
+            return 0;
+        }
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+        
+        int pid = process_exec(abs_path);
+        if (pid < 0) {
+            screen_set_color(VGA_RED, VGA_BLACK);
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Failed to execute. Check file exists and memory.\n");
+        } else {
+            screen_set_color(VGA_GREEN, VGA_BLACK);
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Executed process PID: ");
+            char nbuf[16]; itoa(pid, nbuf, 10);
+            screen_print(nbuf);
+            screen_print("\n");
+            audit_log(AUDIT_APP_OPEN, abs_path);
+        }
+        screen_set_color(VGA_WHITE, VGA_BLACK);
+        return 0;
+    }
+
+    /* ── MkApp ── */
+    if (strcmp(cmd, "mkapp") == 0) {
+        if (arg[0] == '\0') {
+            screen_set_color(VGA_RED, VGA_BLACK);
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Usage: mkapp <filename>\n");
+            screen_set_color(VGA_WHITE, VGA_BLACK);
+            return 0;
+        }
+        char abs_path[128];
+        resolve_path(arg, abs_path);
+        
+        /* Machine code for:
+           while(1) { __asm__ volatile("yield (int 0x80)"); }
+           Actually int 0x80 with eax=0 is yield.
+           Code:
+           b8 00 00 00 00  mov eax, 0
+           cd 80           int 0x80
+           eb f9           jmp -7
+        */
+        char app_code[] = {
+            '\xB8', '\x00', '\x00', '\x00', '\x00', /* mov eax, 0 */
+            '\xCD', '\x80',                         /* int 0x80 */
+            '\xEB', '\xF7'                          /* jmp to mov (starts at IP-9, but size is 2, so offset is -9) */
+        };
+        app_code[8] = (char)0xF7; /* -9 in 2's complement */
+        
+        /* Using internal fs_write trick since it null terminates, we'll write via fs internals if needed. 
+           Wait, fs_write accepts a null-terminated string and stops at 0. Since our code has 0x00, it will stop!
+           Let's rewrite mkapp to directly poke the fs_append or handle binary write.
+           Wait, there is a better infinite loop without 0x00:
+           31 c0     xor eax, eax
+           cd 80     int 0x80
+           eb fa     jmp -6
+        */
+        char safe_app_code[] = {
+            '\x31', '\xC0',         /* xor eax, eax */
+            '\xCD', '\x80',         /* int 0x80 */
+            '\xEB', '\xFA', '\0'    /* jmp -6 */
+        };
+        
+        if (fs_write(abs_path, safe_app_code) == 0) {
+            screen_set_color(VGA_GREEN, VGA_BLACK);
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Successfully written test app code.\n");
+        } else {
+            screen_set_color(VGA_RED, VGA_BLACK);
+            screen_print("   ");
+            screen_putchar((char)254);
+            screen_print(" Failed to write test app.\n");
+        }
+        screen_set_color(VGA_WHITE, VGA_BLACK);
         return 0;
     }
 

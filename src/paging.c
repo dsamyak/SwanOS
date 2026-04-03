@@ -69,13 +69,22 @@ void page_fault_handler(registers_t *regs) {
     }
 }
 
+page_directory_t *paging_clone_dir(page_directory_t *src) {
+    page_directory_t *dir = paging_create_dir();
+    if (!dir) return 0;
+    for (int i = 0; i < 1024; i++) {
+        dir->entries[i] = src->entries[i];
+    }
+    return dir;
+}
+
 void paging_init(void) {
     kernel_dir = paging_create_dir();
     
     /* Identity map the first 128 MB */
     for (uint32_t i = 0; i < 32768; i++) {
         uint32_t addr = i * 4096;
-        uint32_t flags = PAGE_RW | PAGE_USER;
+        uint32_t flags = PAGE_RW; /* Only kernel access */
         paging_map_page(kernel_dir, addr, addr, flags);
     }
     
@@ -83,7 +92,7 @@ void paging_init(void) {
        We will map from 0xC0000000 to 0xFFFFFFFF just to be safe and cover any high VRAM */
     for (uint32_t i = 0xC0000; i < 0x100000; i++) {
         uint32_t addr = i * 4096;
-        paging_map_page(kernel_dir, addr, addr, PAGE_RW | PAGE_USER);
+        paging_map_page(kernel_dir, addr, addr, PAGE_RW);
     }
     
     register_interrupt_handler(14, page_fault_handler);

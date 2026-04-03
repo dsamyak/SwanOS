@@ -22,6 +22,7 @@ const char *user_current(void);            /* Get current username */
 int  user_register(const char *username);  /* Register a new user */
 user_profile_t *user_get_profile(void);    /* Get current user's profile */
 void user_save_profile(void);              /* Persist profile to host */
+void user_periodic_save(void);             /* Periodic profile save (call from main loop) */
 uint32_t user_session_seconds(void);       /* Seconds since current session started */
 
 #endif

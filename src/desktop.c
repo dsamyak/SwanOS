@@ -143,6 +143,7 @@ typedef struct {
     int store_downloaded[6];
     int browser_tab;
     int workspace;
+    uint32_t open_anim_tick;  /* tick when window was opened (for animations) */
 } window_t;
 
 static window_t windows[MAX_WINDOWS];
@@ -181,6 +182,7 @@ static void draw_desktop(void);
 static int  handle_click(int mx, int my);
 static void term_add_line(window_t *w, const char *text);
 static void term_process_cmd(window_t *w);
+static int  sine_approx(int deg);
 
 /* ── Wallpaper ────────────────────────────────────────────── */
 static void render_wallpaper(void) {
@@ -317,6 +319,7 @@ static void draw_icon_glyph(int x, int y, int app_id, int hovered) {
 
 static void draw_icons(void) {
     mouse_state_t ms; mouse_get_state(&ms);
+    uint32_t anim_t = timer_get_ticks();
     /* Proper 2-column grid: 100px wide cells, 90px tall, 30px left margin */
     for (int i = 0; i < num_icons; i++) {
         desktop_icon_t *ic = &icons[i];
@@ -329,13 +332,29 @@ static void draw_icons(void) {
         ic->x = gx;
         ic->y = gy;
         int hovered = (ms.x >= gx && ms.x < gx+80 && ms.y >= gy && ms.y < gy+80);
-        draw_icon_glyph(gx, gy, ic->app_id, hovered);
+
+        /* Dynamic hover effect: neon glow ring + slight lift */
+        if (hovered) {
+            uint32_t accent = icon_accent(ic->app_id);
+            /* Pulsing outer glow */
+            int glow_a = 0x18 + (sine_approx((anim_t * 6 + i * 40) % 360) * 0x10) / 100;
+            if (glow_a < 0x08) glow_a = 0x08;
+            uint32_t glow_c = ((uint32_t)glow_a << 24) | (accent & 0x00FFFFFF);
+            vga_bb_fill_rounded_rect(gx-6, gy-6, 84, 84, 14, glow_c);
+            vga_bb_fill_rounded_rect(gx-3, gy-3, 78, 78, 12, ((uint32_t)(glow_a/2) << 24) | (accent & 0x00FFFFFF));
+            /* Draw icon slightly raised (lift by 2px) */
+            draw_icon_glyph(gx, gy - 2, ic->app_id, hovered);
+        } else {
+            draw_icon_glyph(gx, gy, ic->app_id, hovered);
+        }
+
         /* Centered label below icon */
         int lw = (int)strlen(ic->label) * CW;
         int lx = gx + (72 - lw) / 2;
         if (lx < 2) lx = 2;
-        vga_bb_draw_string_2x(lx+1, gy+62, ic->label, 0x80000000, 0x00000000);
-        vga_bb_draw_string_2x(lx, gy+61, ic->label, B_TEXT, 0x00000000);
+        int ly_off = hovered ? -2 : 0;
+        vga_bb_draw_string_2x(lx+1, gy+62+ly_off, ic->label, 0x80000000, 0x00000000);
+        vga_bb_draw_string_2x(lx, gy+61+ly_off, ic->label, hovered ? 0xFFFFFFFF : B_TEXT, 0x00000000);
     }
 }
 
@@ -482,7 +501,10 @@ static void draw_panel(void) {
      *  Task Buttons Pill Segment
      * ════════════════════════════════════════════════════════ */
     int tasks_x = dock_x + 4 + launcher_w + 6;
-    int tasks_end = dock_x + dock_w - 500;
+    /* Use actual tray position instead of hardcoded offset */
+    int tray_right_ref = dock_x + dock_w - 140;
+    int tray_start_ref = tray_right_ref - 360;
+    int tasks_end = tray_start_ref - 12;  /* 12px gap before tray */
     int tasks_w = tasks_end - tasks_x;
     if (tasks_w < 60) tasks_w = 60;
     if (win_order_count > 0)
@@ -959,14 +981,51 @@ static void draw_window(int wi) {
     if (!w->active) return;
     int focused = (wi == win_focus);
 
+    /* ── Open animation — scale up effect ── */
+    uint32_t now_t = timer_get_ticks();
+    int anim_elapsed = (int)(now_t - w->open_anim_tick);
+    int anim_active = (anim_elapsed < 20); /* 200ms at 100Hz */
+    if (anim_active) {
+        /* Scale factor: 70% → 100% over 20 ticks */
+        int scale = 700 + (anim_elapsed * 300) / 20; /* 700-1000 (0.7x to 1.0x) */
+        if (scale > 1000) scale = 1000;
+        /* Apply scale to dimensions — shrink from center */
+        int orig_w = w->w, orig_h = w->h;
+        int orig_x = w->x, orig_y = w->y;
+        int nw = (orig_w * scale) / 1000;
+        int nh = (orig_h * scale) / 1000;
+        int nx = orig_x + (orig_w - nw) / 2;
+        int ny = orig_y + (orig_h - nh) / 2;
+        /* Temporarily adjust for drawing */
+        w->x = nx; w->y = ny; w->w = nw; w->h = nh;
+        /* Alpha overlay for fade-in */
+        int alpha = (anim_elapsed * 255) / 20;
+        if (alpha > 255) alpha = 255;
+        (void)alpha; /* Used conceptually; VGA doesn't have per-window alpha */
+        /* Draw at scaled size, then restore */
+        ui_window_shadow(w->x, w->y, w->w, w->h);
+        vga_bb_fill_rounded_rect(w->x, w->y, w->w, w->h, 10, B_WIN_BG);
+        if (focused) ui_neon_border(w->x, w->y, w->w, w->h, 10, S_NEON_CYAN);
+        else vga_bb_draw_rect_outline(w->x, w->y, w->w, w->h, B_BORDER);
+        /* Restore original dims for next frame */
+        w->x = orig_x; w->y = orig_y; w->w = orig_w; w->h = orig_h;
+        return; /* Don't draw content during animation */
+    }
+
     /* Multi-layer soft shadow */
     ui_window_shadow(w->x, w->y, w->w, w->h);
 
     /* Window body */
     vga_bb_fill_rounded_rect(w->x, w->y, w->w, w->h, 10, B_WIN_BG);
 
-    /* Border — neon glow on focus, subtle otherwise */
+    /* Border — neon glow on focus with breathing pulse */
     if (focused) {
+        /* Breathing neon border — alpha pulses */
+        int breath = sine_approx((now_t * 4) % 360);
+        int glow_a = 0x20 + (breath * 0x18) / 100;
+        if (glow_a < 0x10) glow_a = 0x10;
+        uint32_t glow_c = ((uint32_t)glow_a << 24) | (S_NEON_CYAN & 0x00FFFFFF);
+        vga_bb_draw_rect_outline(w->x-1, w->y-1, w->w+2, w->h+2, glow_c);
         ui_neon_border(w->x, w->y, w->w, w->h, 10, S_NEON_CYAN);
     } else {
         vga_bb_draw_rect_outline(w->x, w->y, w->w, w->h, B_BORDER);
@@ -974,9 +1033,21 @@ static void draw_window(int wi) {
     /* Inner top highlight for depth */
     vga_bb_draw_hline(w->x+10, w->y+1, w->w-20, S_GLASS_BORDER);
 
-    /* Title bar — gradient on focus */
+    /* Title bar — gradient on focus with shimmer effect */
     if (focused) {
         vga_bb_fill_rounded_rect_gradient(w->x+1, w->y+1, w->w-2, TITLEBAR_H, 0, S_TITLEBAR_F, S_BG_DARK);
+        /* Shimmer sweep across title bar */
+        int shimmer_x = (int)((now_t * 3) % (uint32_t)(w->w + 60)) - 30;
+        for (int sx = shimmer_x - 15; sx < shimmer_x + 15 && sx < w->w - 4; sx++) {
+            if (sx < 2) continue;
+            int dist = sx - shimmer_x; if (dist < 0) dist = -dist;
+            int sa = 0x12 - (dist * 0x12) / 15;
+            if (sa > 0) {
+                uint32_t sc = ((uint32_t)sa << 24) | 0x00FFFFFF;
+                vga_bb_putpixel(w->x + 1 + sx, w->y + 2, sc);
+                vga_bb_putpixel(w->x + 1 + sx, w->y + 3, sc);
+            }
+        }
     } else {
         vga_bb_fill_rect(w->x+1, w->y+1, w->w-2, TITLEBAR_H, B_TITLEBAR);
     }
@@ -1558,6 +1629,7 @@ static void open_window(int type) {
         case WIN_NETWORK: strcpy(w->title,"Network"); w->x=300;w->y=100;w->w=700;w->h=580; break;
         case WIN_AUDIT: strcpy(w->title,"Audit Log"); w->x=260;w->y=120;w->w=820;w->h=520; break;
     }
+    w->open_anim_tick = timer_get_ticks();  /* Start open animation */
     win_order[win_order_count++]=wi; win_focus=wi;
     /* Audit log the app open */
     audit_log(AUDIT_APP_OPEN, w->title);
@@ -1663,7 +1735,7 @@ static int handle_click(int mx, int my) {
         if (mx >= net_region && mx < net_region + 44 && !rearrange_mode) { open_window(WIN_NETWORK); return 0; }
         /* Task buttons */
         int launcher_w2 = 56;
-        int bx=dock_x + 4 + launcher_w2 + 6 + 8;
+        int bx=dock_x + 4 + launcher_w2 + 6 + 8; /* Match draw_panel tasks_x + 8 */
         for (int i=0;i<win_order_count;i++) { int wi=win_order[i]; if(!windows[wi].active) continue;
             int bw=(int)strlen(windows[wi].title)*CW+32; if(bw>200) bw=200;
             if (mx>=bx&&mx<bx+bw) { bring_to_front(wi); return 0; } bx+=bw+6; }
@@ -2024,6 +2096,8 @@ void desktop_run(void) {
                 needs_redraw = 1;
             }
             sysmon_tick = ticks;
+            /* Periodic user profile save */
+            user_periodic_save();
         }
 
         /* Cursor blink — only trigger redraw if a text-input window is focused */

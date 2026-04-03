@@ -35,5 +35,6 @@ void process_start_scheduling(void);
 
 int process_ipc_send(uint32_t dest_pid, void *msg, uint32_t len);
 int process_ipc_recv(uint32_t *src_pid, void *msg, uint32_t max_len);
+int process_exec(const char *filename);
 
 #endif
