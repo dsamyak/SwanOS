@@ -61,7 +61,7 @@
 #define B_SHADOW     S_SHADOW
 
 /* ── Icons ────────────────────────────────────────────────── */
-#define MAX_WINDOWS 13
+#define MAX_WINDOWS 16
 #define WIN_TERM 0
 #define WIN_FILES 1
 #define WIN_NOTES 2
@@ -73,28 +73,32 @@
 #define WIN_BROWSER 8
 #define WIN_NETWORK 9
 #define WIN_AUDIT 10
+#define WIN_DRAW 11
+#define WIN_CLOCK 12
 
 #define ICON_W     80
 #define ICON_H     80
-#define MAX_ICONS  12
+#define MAX_ICONS  16
 
 typedef struct { int x, y; const char *label; int app_id; } desktop_icon_t;
 
 static desktop_icon_t icons[MAX_ICONS] = {
-    {50, 40,   "AI Chat",  WIN_AI},
-    {50, 150,  "Terminal", WIN_TERM},
-    {50, 260,  "Files",    WIN_FILES},
-    {50, 370,  "Notes",    WIN_NOTES},
-    {50, 480,  "About",    WIN_ABOUT},
-    {50, 590,  "Calc",     WIN_CALC},
-    {50, 700,  "SysMon",   WIN_SYSMON},
-    {170, 40,  "Store",    WIN_STORE},
-    {170, 150, "Browser",  WIN_BROWSER},
-    {170, 260, "Network",  WIN_NETWORK},
-    {170, 370, "Audit",    WIN_AUDIT},
+    {50, 40,   "SwanSoul",  WIN_AI},
+    {50, 150,  "SwanShell", WIN_TERM},
+    {50, 260,  "Feather",   WIN_FILES},
+    {50, 370,  "LoveLetter",WIN_NOTES},
+    {50, 480,  "SwanSong",  WIN_ABOUT},
+    {50, 590,  "SwanCount", WIN_CALC},
+    {50, 700,  "Heartbeat", WIN_SYSMON},
+    {170, 40,  "SwanNest",  WIN_STORE},
+    {170, 150, "SwanLake",  WIN_BROWSER},
+    {170, 260, "WingLink",  WIN_NETWORK},
+    {170, 370, "SwanWatch", WIN_AUDIT},
+    {170, 480, "SwanDraw",  WIN_DRAW},
+    {170, 590, "SwanClock", WIN_CLOCK},
     {0, 0, 0, 0},
 };
-static int num_icons = 11;
+static int num_icons = 13;
 
 /* ── Notification Toast System ──────────────────────────── */
 #define MAX_TOASTS 4
@@ -144,6 +148,13 @@ typedef struct {
     int browser_tab;
     int workspace;
     uint32_t open_anim_tick;  /* tick when window was opened (for animations) */
+    /* SwanDraw state */
+    uint8_t draw_canvas[32][32]; /* 32x32 pixel art (color index 0-7) */
+    int draw_color;              /* selected palette color index */
+    /* SwanClock state */
+    int clock_sw_running;        /* stopwatch running? */
+    uint32_t clock_sw_start;     /* stopwatch start tick */
+    uint32_t clock_sw_elapsed;   /* stopwatch accumulated ticks */
 } window_t;
 
 static window_t windows[MAX_WINDOWS];
@@ -154,17 +165,19 @@ static int dragging = 0, drag_win = -1, drag_ox, drag_oy;
 /* ── Kickoff Menu ─────────────────────────────────────────── */
 static int kickoff_open = 0;
 #define KO_W     280
-#define KO_ITEMS  13
+#define KO_ITEMS  15
 #define KO_ITEM_H 36
 #define KO_HEADER  80
 #define KO_H      (KO_HEADER + KO_ITEMS * KO_ITEM_H + 8)
 
 static const char *ko_labels[KO_ITEMS] = {
-    "AI Chat", "Terminal", "Files", "Notes", "Calc", "SysMonitor", "About",
-    "Store", "Browser", "Network", "Audit Log",
+    "SwanSoul", "SwanShell", "Feather", "LoveLetter",
+    "SwanCount", "Heartbeat", "SwanSong",
+    "SwanNest", "SwanLake", "WingLink", "SwanWatch",
+    "SwanDraw", "SwanClock",
     "--------", "Shut Down"
 };
-static int ko_ids[KO_ITEMS] = {WIN_AI,WIN_TERM,WIN_FILES,WIN_NOTES,WIN_CALC,WIN_SYSMON,WIN_ABOUT,WIN_STORE,WIN_BROWSER,WIN_NETWORK,WIN_AUDIT,-1,-2};
+static int ko_ids[KO_ITEMS] = {WIN_AI,WIN_TERM,WIN_FILES,WIN_NOTES,WIN_CALC,WIN_SYSMON,WIN_ABOUT,WIN_STORE,WIN_BROWSER,WIN_NETWORK,WIN_AUDIT,WIN_DRAW,WIN_CLOCK,-1,-2};
 
 /* ── Workspace ────────────────────────────────────────────── */
 #define MAX_WORKSPACES 3
@@ -218,6 +231,8 @@ static uint32_t icon_accent(int app_id) {
         case WIN_BROWSER: return S_ORANGE;
         case WIN_NETWORK: return S_BLUE;
         case WIN_AUDIT:   return S_NEON_MAGENTA;
+        case WIN_DRAW:    return S_PINK;
+        case WIN_CLOCK:   return S_YELLOW;
         default:          return S_NEON_CYAN;
     }
 }
@@ -313,6 +328,28 @@ static void draw_icon_glyph(int x, int y, int app_id, int hovered) {
             vga_bb_draw_circle(cx+14, cy+22, 6, B_GREEN);
             vga_bb_fill_circle(cx+14, cy+22, 2, B_GREEN);
             vga_bb_fill_rect(cx, cy+23, 28, 4, B_BG_DARK);
+            break;
+        case WIN_DRAW:
+            vga_bb_fill_rounded_rect(cx-1, cy+1, 30, 30, 4, B_SHADOW);
+            vga_bb_fill_rounded_rect(cx-2, cy, 30, 30, 4, S_PINK);
+            vga_bb_fill_rounded_rect(cx, cy+2, 26, 26, 3, B_BG_DARK);
+            /* Paint palette dots */
+            vga_bb_fill_circle(cx+6, cy+8, 3, S_RED);
+            vga_bb_fill_circle(cx+16, cy+8, 3, S_GREEN);
+            vga_bb_fill_circle(cx+6, cy+18, 3, S_BLUE);
+            vga_bb_fill_circle(cx+16, cy+18, 3, S_YELLOW);
+            /* Brush stroke */
+            vga_bb_fill_rect(cx+20, cy+4, 3, 20, S_PINK);
+            break;
+        case WIN_CLOCK:
+            vga_bb_fill_rounded_rect(cx-1, cy+1, 30, 30, 4, B_SHADOW);
+            vga_bb_fill_circle(cx+13, cy+16, 14, S_YELLOW);
+            vga_bb_fill_circle(cx+13, cy+16, 12, B_BG_DARK);
+            /* Clock hands */
+            vga_bb_fill_rect(cx+12, cy+8, 2, 9, S_YELLOW);
+            vga_bb_fill_rect(cx+13, cy+15, 7, 2, S_NEON_CYAN);
+            /* Center dot */
+            vga_bb_fill_circle(cx+13, cy+16, 2, S_YELLOW);
             break;
     }
 }
@@ -700,6 +737,24 @@ static void draw_panel(void) {
     ui_divider_v(tx-3, dock_y+12, PANEL_H-24, 0x30FFFFFF);
     tx += 5;
 
+    /* ── 4b. Security Lock ── */
+    {
+        int lk_w = 22;
+        int lk_hover = (msx >= tx-4 && msx < tx+lk_w+4 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+        ui_tray_icon_bg(tx-4, dock_y+8, lk_w+8, PANEL_H-16, lk_hover);
+        int ly = dock_y + PANEL_H/2;
+        /* Lock body */
+        vga_bb_fill_rounded_rect(tx+2, ly-2, 14, 12, 2, S_GREEN);
+        /* Lock shackle (arc) */
+        vga_bb_draw_rect_outline(tx+4, ly-9, 10, 8, S_GREEN);
+        vga_bb_fill_rect(tx+6, ly-7, 6, 5, 0x00000000);
+        /* Keyhole */
+        vga_bb_fill_circle(tx+9, ly+3, 2, S_BG_DEEP);
+        if (lk_hover && !rearrange_mode)
+            ui_tooltip(tx + lk_w/2, dock_y, "Secure", S_BG_LIGHT, S_TEXT);
+        tx += lk_w + 6;
+    }
+
     /* ── 5. Notification bell ── */
     {
         int bell_w = 28;
@@ -874,10 +929,10 @@ static int ctx_menu_open = 0;
 static int ctx_menu_x = 0;
 static int ctx_menu_y = 0;
 #define CTX_W 240
-#define CTX_ITEMS 3
+#define CTX_ITEMS 4
 #define CTX_ITEM_H 36
 #define CTX_H (CTX_ITEMS * CTX_ITEM_H + 8)
-static const char *ctx_labels[CTX_ITEMS] = { "New Note", "System Monitor", "Refresh Wallpaper" };
+static const char *ctx_labels[CTX_ITEMS] = { "LoveLetter", "Heartbeat", "SwanDraw", "Refresh" };
 
 static void draw_context_menu(void) {
     if (!ctx_menu_open) return;
@@ -948,7 +1003,7 @@ static void draw_kickoff(void) {
     /* Menu items */
     mouse_state_t ms; mouse_get_state(&ms);
     /* Per-item neon accent colors */
-    uint32_t ko_colors[KO_ITEMS] = {S_NEON_PURPLE, S_GREEN, S_YELLOW, S_NEON_CYAN, S_PINK, S_RED, S_BLUE, S_GREEN, S_ORANGE, S_BLUE, S_NEON_MAGENTA, 0, S_RED};
+    uint32_t ko_colors[KO_ITEMS] = {S_NEON_PURPLE, S_GREEN, S_YELLOW, S_NEON_CYAN, S_PINK, S_RED, S_BLUE, S_GREEN, S_ORANGE, S_BLUE, S_NEON_MAGENTA, S_PINK, S_YELLOW, 0, S_RED};
     for (int i = 0; i < KO_ITEMS; i++) {
         int iy = mx_top + KO_HEADER + i * KO_ITEM_H;
         if (ko_labels[i][0] == '-') {
@@ -1171,26 +1226,44 @@ static void draw_window(int wi) {
     else if (w->type == WIN_ABOUT) {
         vga_bb_fill_rect(cx, cy, cw, ch, B_WIN_BG);
         int ay = cy + 12;
-        vga_bb_draw_string_2x(cx+12, ay, "SwanOS", B_ACCENT, 0x00000000);
-        ay += CH+6;
-        vga_bb_draw_string_2x(cx+12, ay, "Version 3.0", B_TEXT, 0x00000000);
-        ay += CH+6;
-        vga_bb_draw_hline(cx+12, ay, cw-24, B_SEPARATOR);
-        ay += 8;
-        vga_bb_draw_string_2x(cx+12, ay, "AI-Powered OS", B_GREEN, 0x00000000);
+        /* Swan emblem */
+        vga_bb_fill_circle(cx+cw/2, ay+30, 28, S_NEON_CYAN);
+        vga_bb_fill_circle(cx+cw/2, ay+30, 24, B_BG_DARK);
+        vga_bb_draw_string_2x(cx+cw/2-7, ay+23, "S", S_NEON_CYAN, 0x00000000);
+        ay += 66;
+        vga_bb_draw_string_2x(cx+cw/2-3*CW, ay, "SwanOS", S_NEON_CYAN, 0x00000000);
         ay += CH+4;
-        vga_bb_draw_string_2x(cx+12, ay, "Bare-Metal x86", B_TEXT, 0x00000000);
+        vga_bb_draw_string_2x(cx+cw/2-5*CW, ay, "Version 3.0", B_TEXT, 0x00000000);
         ay += CH+6;
+        vga_bb_draw_hline(cx+20, ay, cw-40, B_SEPARATOR);
+        ay += 10;
+        /* Swan philosophy */
+        vga_bb_draw_string_2x(cx+16, ay, "The Swan - Symbol of", S_YELLOW, 0x00000000);
+        ay += CH+4;
+        vga_bb_draw_string_2x(cx+16, ay, "ultimate love, grace", S_YELLOW, 0x00000000);
+        ay += CH+4;
+        vga_bb_draw_string_2x(cx+16, ay, "and eternal devotion.", S_YELLOW, 0x00000000);
+        ay += CH+10;
+        vga_bb_draw_string_2x(cx+16, ay, "Where Love Meets", S_NEON_PURPLE, 0x00000000);
+        ay += CH+4;
+        vga_bb_draw_string_2x(cx+16, ay, "Technology.", S_NEON_PURPLE, 0x00000000);
+        ay += CH+10;
+        vga_bb_draw_hline(cx+20, ay, cw-40, B_SEPARATOR);
+        ay += 8;
+        vga_bb_draw_string_2x(cx+16, ay, "AI-Powered  Secure", B_GREEN, 0x00000000);
+        ay += CH+4;
+        vga_bb_draw_string_2x(cx+16, ay, "Bare-Metal x86", B_TEXT, 0x00000000);
+        ay += CH+4;
         char res[20]; itoa(GFX_W, res, 10); strcat(res, "x");
         char t2[8]; itoa(GFX_H, t2, 10); strcat(res, t2);
-        vga_bb_draw_string_2x(cx+12, ay, res, B_TEXT_DIM, 0x00000000);
+        vga_bb_draw_string_2x(cx+16, ay, res, B_TEXT_DIM, 0x00000000);
         ay += CH+4;
         char mb[20]; char tmp[8];
         strcpy(mb, "Mem: "); itoa(mem_total()/1024, tmp, 10); strcat(mb, tmp); strcat(mb, "K");
-        vga_bb_draw_string_2x(cx+12, ay, mb, B_TEXT_DIM, 0x00000000);
-        ay += CH+8;
-        vga_bb_draw_string_2x(cx+12, ay, "User:", B_TEXT_DIM, 0x00000000);
-        vga_bb_draw_string_2x(cx+12+6*CW, ay, user_current(), B_ACCENT, 0x00000000);
+        vga_bb_draw_string_2x(cx+16, ay, mb, B_TEXT_DIM, 0x00000000);
+        ay += CH+6;
+        vga_bb_draw_string_2x(cx+16, ay, "User:", B_TEXT_DIM, 0x00000000);
+        vga_bb_draw_string_2x(cx+16+6*CW, ay, user_current(), B_ACCENT, 0x00000000);
     }
     else if (w->type == WIN_CALC) {
         vga_bb_fill_rect(cx, cy, cw, ch, B_BG_DARK);
@@ -1490,7 +1563,7 @@ static void draw_window(int wi) {
         /* Header */
         vga_bb_fill_rect(cx, cy, cw, CH+8, B_BG_ALT);
         vga_bb_fill_circle(cx+20, cy+12, 6, S_NEON_MAGENTA);
-        vga_bb_draw_string_2x(cx+32, cy+4, "Audit Log", S_NEON_MAGENTA, 0x00000000);
+        vga_bb_draw_string_2x(cx+32, cy+4, "SwanWatch", S_NEON_MAGENTA, 0x00000000);
         /* Event count badge */
         char ecnt[12]; char etmp[8];
         int ac = audit_get_count();
@@ -1556,6 +1629,136 @@ static void draw_window(int wi) {
             ey += CH + 6;
         }
     }
+    else if (w->type == WIN_DRAW) {
+        /* SwanDraw — Pixel Art Canvas */
+        vga_bb_fill_rect(cx, cy, cw, ch, B_BG_DARK);
+        /* Color palette bar */
+        static const uint32_t draw_colors[8] = {
+            0xFFFFFFFF, 0xFF000000, 0xFFFF4444, 0xFF44FF44,
+            0xFF4488FF, 0xFFFFFF44, 0xFFFF44FF, 0xFF44FFFF
+        };
+        int palette_y = cy + 4;
+        for (int ci = 0; ci < 8; ci++) {
+            int px = cx + 8 + ci * 34;
+            vga_bb_fill_rounded_rect(px, palette_y, 28, 28, 4, draw_colors[ci]);
+            if (ci == w->draw_color) {
+                vga_bb_draw_rect_outline(px-2, palette_y-2, 32, 32, S_NEON_CYAN);
+                vga_bb_draw_rect_outline(px-1, palette_y-1, 30, 30, S_NEON_CYAN);
+            }
+        }
+        /* Clear button */
+        vga_bb_fill_rounded_rect(cx+8+8*34+10, palette_y, 60, 28, 6, S_RED);
+        vga_bb_draw_string_2x(cx+8+8*34+16, palette_y+6, "CLR", B_BG_DARK, 0x00000000);
+        vga_bb_draw_hline(cx, palette_y+34, cw, B_SEPARATOR);
+        /* Canvas area */
+        int canvas_x = cx + 8, canvas_y = palette_y + 40;
+        int canvas_w = cw - 16, canvas_h = ch - 52;
+        vga_bb_fill_rect(canvas_x, canvas_y, canvas_w, canvas_h, 0xFF202020);
+        vga_bb_draw_rect_outline(canvas_x, canvas_y, canvas_w, canvas_h, B_BORDER);
+        /* Draw stored pixel data from note_text buffer (used as pixel grid) */
+        /* Grid: 64 x 48 cells, each byte stores color index */
+        int cell_w = canvas_w / 64;
+        int cell_h = canvas_h / 48;
+        if (cell_w < 2) cell_w = 2;
+        if (cell_h < 2) cell_h = 2;
+        for (int py = 0; py < 48; py++) {
+            for (int px = 0; px < 64; px++) {
+                int idx = py * 64 + px;
+                if (idx >= 512) break;
+                int ci = (uint8_t)w->note_text[idx];
+                if (ci > 0 && ci <= 8) {
+                    vga_bb_fill_rect(canvas_x + px*cell_w, canvas_y + py*cell_h,
+                                     cell_w, cell_h, draw_colors[ci-1]);
+                }
+            }
+        }
+        /* Grid lines (subtle) */
+        for (int gx = 0; gx <= 64; gx += 8)
+            vga_bb_draw_vline(canvas_x + gx*cell_w, canvas_y, canvas_h, 0x20FFFFFF);
+        for (int gy = 0; gy <= 48; gy += 8)
+            vga_bb_draw_hline(canvas_x, canvas_y + gy*cell_h, canvas_w, 0x20FFFFFF);
+        /* Status */
+        vga_bb_draw_string_2x(cx+8, cy+ch-CH-4, "Click to paint", B_TEXT_DIM, 0x00000000);
+    }
+    else if (w->type == WIN_CLOCK) {
+        /* SwanClock — Stopwatch + Clock */
+        vga_bb_fill_rect(cx, cy, cw, ch, B_BG_DARK);
+        /* Large analog clock face */
+        int clock_cx = cx + cw/2;
+        int clock_cy = cy + 120;
+        int clock_r = 90;
+        vga_bb_fill_circle(clock_cx, clock_cy, clock_r+4, S_NEON_CYAN);
+        vga_bb_fill_circle(clock_cx, clock_cy, clock_r, B_BG_DARK);
+        /* Hour markers */
+        for (int h = 0; h < 12; h++) {
+            int deg = h * 30;
+            int mx2 = clock_cx + (sine_approx((deg+90)%360) * (clock_r-10)) / 100;
+            int my2 = clock_cy - (sine_approx(deg%360) * (clock_r-10)) / 100;
+            vga_bb_fill_circle(mx2, my2, 3, S_TEXT);
+        }
+        /* Current time hands */
+        rtc_time_t ct; rtc_read(&ct);
+        /* Hour hand */
+        int h_deg = ((ct.hour % 12) * 30 + ct.minute / 2);
+        int hx = clock_cx + (sine_approx((h_deg+90)%360) * 50) / 100;
+        int hy = clock_cy - (sine_approx(h_deg%360) * 50) / 100;
+        vga_bb_fill_rect(clock_cx < hx ? clock_cx : hx, clock_cy < hy ? clock_cy : hy,
+                         (hx > clock_cx ? hx-clock_cx : clock_cx-hx) + 3,
+                         (hy > clock_cy ? hy-clock_cy : clock_cy-hy) + 3, S_TEXT);
+        /* Minute hand */
+        int m_deg = ct.minute * 6;
+        int mmx = clock_cx + (sine_approx((m_deg+90)%360) * 70) / 100;
+        int mmy = clock_cy - (sine_approx(m_deg%360) * 70) / 100;
+        vga_bb_fill_rect(clock_cx < mmx ? clock_cx : mmx, clock_cy < mmy ? clock_cy : mmy,
+                         (mmx > clock_cx ? mmx-clock_cx : clock_cx-mmx) + 2,
+                         (mmy > clock_cy ? mmy-clock_cy : clock_cy-mmy) + 2, S_NEON_CYAN);
+        /* Center dot */
+        vga_bb_fill_circle(clock_cx, clock_cy, 4, S_YELLOW);
+        /* Digital time below */
+        char clkbuf[10]; rtc_format_time(&ct, clkbuf);
+        int clkw = (int)strlen(clkbuf) * CW;
+        vga_bb_draw_string_2x(clock_cx - clkw/2, clock_cy + clock_r + 16, clkbuf, S_TEXT, 0x00000000);
+        /* Separator */
+        int sep_y = clock_cy + clock_r + 40;
+        vga_bb_draw_hline(cx+20, sep_y, cw-40, B_SEPARATOR);
+        /* Stopwatch section */
+        int sw_y = sep_y + 12;
+        vga_bb_draw_string_2x(cx+cw/2-5*CW, sw_y, "Stopwatch", S_NEON_PURPLE, 0x00000000);
+        sw_y += CH + 8;
+        /* Display stopwatch time */
+        int sw_ticks = (int)w->clock_sw_elapsed;
+        if (w->clock_sw_running) sw_ticks += (int)(timer_get_ticks() - w->clock_sw_start);
+        int sw_sec = sw_ticks / 100;
+        int sw_min = sw_sec / 60;
+        int sw_cs = sw_ticks % 100;
+        sw_sec %= 60;
+        char swbuf[20]; char stmp[8];
+        strcpy(swbuf, "");
+        if (sw_min < 10) strcat(swbuf, "0");
+        itoa(sw_min, stmp, 10); strcat(swbuf, stmp); strcat(swbuf, ":");
+        if (sw_sec < 10) strcat(swbuf, "0");
+        itoa(sw_sec, stmp, 10); strcat(swbuf, stmp); strcat(swbuf, ".");
+        if (sw_cs < 10) strcat(swbuf, "0");
+        itoa(sw_cs, stmp, 10); strcat(swbuf, stmp);
+        int sww = (int)strlen(swbuf) * CW;
+        vga_bb_draw_string_2x(cx+cw/2-sww/2, sw_y, swbuf, S_TEXT, 0x00000000);
+        sw_y += CH + 12;
+        /* Buttons: Start/Stop | Reset */
+        mouse_state_t cms; mouse_get_state(&cms);
+        int btn_w = 100, btn_h = 32;
+        int btn1_x = cx + cw/2 - btn_w - 10;
+        int btn2_x = cx + cw/2 + 10;
+        int b1_hover = (cms.x >= btn1_x && cms.x < btn1_x+btn_w && cms.y >= sw_y && cms.y < sw_y+btn_h);
+        int b2_hover = (cms.x >= btn2_x && cms.x < btn2_x+btn_w && cms.y >= sw_y && cms.y < sw_y+btn_h);
+        const char *b1_lbl = w->clock_sw_running ? "Stop" : "Start";
+        uint32_t b1_c = w->clock_sw_running ? S_RED : S_GREEN;
+        vga_bb_fill_rounded_rect(btn1_x, sw_y, btn_w, btn_h, 8, b1_hover ? b1_c : (b1_c & 0xC0FFFFFF));
+        int b1w = (int)strlen(b1_lbl) * CW;
+        vga_bb_draw_string_2x(btn1_x+(btn_w-b1w)/2, sw_y+8, b1_lbl, B_BG_DARK, 0x00000000);
+        vga_bb_fill_rounded_rect(btn2_x, sw_y, btn_w, btn_h, 8, b2_hover ? S_YELLOW : 0xC0999900);
+        int b2w = (int)strlen("Reset") * CW;
+        vga_bb_draw_string_2x(btn2_x+(btn_w-b2w)/2, sw_y+8, "Reset", B_BG_DARK, 0x00000000);
+    }
 }
 
 /* ── Cursor (Breeze-like arrow) ───────────────────────────── */
@@ -1613,21 +1816,25 @@ static void open_window(int type) {
     int wi=find_free_window(); if (wi<0) return;
     window_t *w=&windows[wi]; memset(w,0,sizeof(window_t)); w->active=1; w->type=type; w->workspace=current_workspace;
     switch (type) {
-        case WIN_TERM: strcpy(w->title,"Console"); w->x=280;w->y=120;w->w=820;w->h=520;
-            term_add_line(w,"SwanOS Terminal"); term_add_line(w,"Type 'help'"); break;
-        case WIN_FILES: strcpy(w->title,"Dolphin"); w->x=320;w->y=180;w->w=820;w->h=520; w->file_sel=0; break;
-        case WIN_NOTES: strcpy(w->title,"KWrite"); w->x=360;w->y=220;w->w=820;w->h=520;
+        case WIN_TERM: strcpy(w->title,"SwanShell"); w->x=280;w->y=120;w->w=820;w->h=520;
+            term_add_line(w,"SwanShell Terminal"); term_add_line(w,"Type 'help'"); break;
+        case WIN_FILES: strcpy(w->title,"Feather"); w->x=320;w->y=180;w->w=820;w->h=520; w->file_sel=0; break;
+        case WIN_NOTES: strcpy(w->title,"LoveLetter"); w->x=360;w->y=220;w->w=820;w->h=520;
             strcpy(w->note_file,"notes.txt"); fs_read("notes.txt",w->note_text,sizeof(w->note_text)-1);
             w->note_len=strlen(w->note_text); w->note_cursor=w->note_len; break;
-        case WIN_ABOUT: strcpy(w->title,"About"); w->x=420;w->y=280;w->w=620;w->h=420; break;
-        case WIN_AI: strcpy(w->title,"AI Chat"); w->x=240;w->y=80;w->w=840;w->h=620;
-            term_add_line(w,"SwanOS AI Assistant"); term_add_line(w,"Ask me anything!"); break;
-        case WIN_CALC: strcpy(w->title,"Calculator"); w->x=500;w->y=160;w->w=320;w->h=460; w->input[0]='0'; w->input[1]='\0'; w->calc_new=1; break;
-        case WIN_SYSMON: strcpy(w->title,"System Monitor"); w->x=600;w->y=300;w->w=560;w->h=380; w->sysmon_head=0; memset(w->sysmon_history,0,sizeof(w->sysmon_history)); break;
-        case WIN_STORE: strcpy(w->title,"Store"); w->x=200;w->y=60;w->w=860;w->h=560; w->store_sel=0; memset(w->store_downloaded,0,sizeof(w->store_downloaded)); break;
-        case WIN_BROWSER: strcpy(w->title,"Browser"); w->x=180;w->y=40;w->w=900;w->h=640; w->browser_tab=0; break;
-        case WIN_NETWORK: strcpy(w->title,"Network"); w->x=300;w->y=100;w->w=700;w->h=580; break;
-        case WIN_AUDIT: strcpy(w->title,"Audit Log"); w->x=260;w->y=120;w->w=820;w->h=520; break;
+        case WIN_ABOUT: strcpy(w->title,"SwanSong"); w->x=420;w->y=200;w->w=620;w->h=520; break;
+        case WIN_AI: strcpy(w->title,"SwanSoul"); w->x=240;w->y=80;w->w=840;w->h=620;
+            term_add_line(w,"SwanSoul AI"); term_add_line(w,"Ask me anything!"); break;
+        case WIN_CALC: strcpy(w->title,"SwanCount"); w->x=500;w->y=160;w->w=320;w->h=460; w->input[0]='0'; w->input[1]='\0'; w->calc_new=1; break;
+        case WIN_SYSMON: strcpy(w->title,"Heartbeat"); w->x=600;w->y=300;w->w=560;w->h=380; w->sysmon_head=0; memset(w->sysmon_history,0,sizeof(w->sysmon_history)); break;
+        case WIN_STORE: strcpy(w->title,"SwanNest"); w->x=200;w->y=60;w->w=860;w->h=560; w->store_sel=0; memset(w->store_downloaded,0,sizeof(w->store_downloaded)); break;
+        case WIN_BROWSER: strcpy(w->title,"SwanLake"); w->x=180;w->y=40;w->w=900;w->h=640; w->browser_tab=0; break;
+        case WIN_NETWORK: strcpy(w->title,"WingLink"); w->x=300;w->y=100;w->w=700;w->h=580; break;
+        case WIN_AUDIT: strcpy(w->title,"SwanWatch"); w->x=260;w->y=120;w->w=820;w->h=520; break;
+        case WIN_DRAW: strcpy(w->title,"SwanDraw"); w->x=200;w->y=80;w->w=680;w->h=520;
+            w->draw_color=0; memset(w->draw_canvas,0,sizeof(w->draw_canvas)); break;
+        case WIN_CLOCK: strcpy(w->title,"SwanClock"); w->x=500;w->y=120;w->w=400;w->h=460;
+            w->clock_sw_running=0; w->clock_sw_start=0; w->clock_sw_elapsed=0; break;
     }
     w->open_anim_tick = timer_get_ticks();  /* Start open animation */
     win_order[win_order_count++]=wi; win_focus=wi;
@@ -1680,7 +1887,8 @@ static int handle_click(int mx, int my) {
             int idx = (my - ctx_menu_y - 4) / CTX_ITEM_H;
             if (idx == 0) open_window(WIN_NOTES);
             else if (idx == 1) open_window(WIN_SYSMON);
-            else if (idx == 2) wp_cached = 0;
+            else if (idx == 2) open_window(WIN_DRAW);
+            else if (idx == 3) wp_cached = 0;
         }
         ctx_menu_open = 0; return 0;
     }
@@ -1822,6 +2030,69 @@ static int handle_click(int mx, int my) {
                     if (mx >= bcx+130 && mx < bcx+230) { w->browser_tab = 1; return 0; }
                 }
             }
+            /* SwanDraw click — palette, clear, and canvas painting */
+            if (w->type == WIN_DRAW) {
+                int dcx = w->x+4, dcy = w->y+TITLEBAR_H+4, dcw = w->w-8;
+                int palette_y2 = dcy + 4;
+                /* Palette color selection */
+                for (int ci = 0; ci < 8; ci++) {
+                    int ppx = dcx + 8 + ci * 34;
+                    if (mx >= ppx && mx < ppx+28 && my >= palette_y2 && my < palette_y2+28) {
+                        w->draw_color = ci;
+                        return 0;
+                    }
+                }
+                /* Clear button */
+                int clr_x = dcx + 8 + 8*34 + 10;
+                if (mx >= clr_x && mx < clr_x+60 && my >= palette_y2 && my < palette_y2+28) {
+                    memset(w->note_text, 0, 512);
+                    return 0;
+                }
+                /* Canvas painting */
+                int cv_x = dcx + 8, cv_y = palette_y2 + 40;
+                int cv_w = dcw - 16, cv_h = w->h - TITLEBAR_H - 8 - 52;
+                int cell_w2 = cv_w / 64; if (cell_w2 < 2) cell_w2 = 2;
+                int cell_h2 = cv_h / 48; if (cell_h2 < 2) cell_h2 = 2;
+                if (mx >= cv_x && mx < cv_x + 64*cell_w2 && my >= cv_y && my < cv_y + 48*cell_h2) {
+                    int px2 = (mx - cv_x) / cell_w2;
+                    int py2 = (my - cv_y) / cell_h2;
+                    if (px2 >= 0 && px2 < 64 && py2 >= 0 && py2 < 48) {
+                        int idx2 = py2 * 64 + px2;
+                        if (idx2 < 512) w->note_text[idx2] = (char)(w->draw_color + 1);
+                    }
+                    return 0;
+                }
+            }
+            /* SwanClock click — stopwatch start/stop/reset */
+            if (w->type == WIN_CLOCK) {
+                int ccx = w->x+4, ccy = w->y+TITLEBAR_H+4, ccw = w->w-8;
+                int clock_r2 = 90;
+                int sep_y2 = ccy + 120 + clock_r2 + 40;
+                int sw_y2 = sep_y2 + 12 + CH + 8 + CH + 12;
+                int btn_w2 = 100, btn_h2 = 32;
+                int btn1_x2 = ccx + ccw/2 - btn_w2 - 10;
+                int btn2_x2 = ccx + ccw/2 + 10;
+                /* Start/Stop button */
+                if (mx >= btn1_x2 && mx < btn1_x2+btn_w2 && my >= sw_y2 && my < sw_y2+btn_h2) {
+                    if (w->clock_sw_running) {
+                        /* Stop: accumulate elapsed */
+                        w->clock_sw_elapsed += timer_get_ticks() - w->clock_sw_start;
+                        w->clock_sw_running = 0;
+                    } else {
+                        /* Start */
+                        w->clock_sw_start = timer_get_ticks();
+                        w->clock_sw_running = 1;
+                    }
+                    return 0;
+                }
+                /* Reset button */
+                if (mx >= btn2_x2 && mx < btn2_x2+btn_w2 && my >= sw_y2 && my < sw_y2+btn_h2) {
+                    w->clock_sw_running = 0;
+                    w->clock_sw_elapsed = 0;
+                    w->clock_sw_start = 0;
+                    return 0;
+                }
+            }
             /* Network click — connect/disconnect button */
             if (w->type == WIN_NETWORK) {
                 net_status_t *ns = net_get_status();
@@ -1833,6 +2104,50 @@ static int handle_click(int mx, int my) {
                         net_toggle_connection();
                         return 0;
                     }
+                }
+            }
+            /* SwanDraw — canvas click */
+            if (w->type == WIN_DRAW) {
+                int dcx = w->x+4, dcy = w->y+TITLEBAR_H+4;
+                int dcw = w->w-8;
+                int palette_y = dcy + 4;
+                for (int ci = 0; ci < 8; ci++) {
+                    int px2 = dcx + 8 + ci * 34;
+                    if (mx >= px2 && mx < px2+28 && my >= palette_y && my < palette_y+28) {
+                        w->calc_v1 = ci; return 0;
+                    }
+                }
+                if (mx >= dcx+8+8*34+10 && mx < dcx+8+8*34+70 && my >= palette_y && my < palette_y+28) {
+                    memset(w->note_text, 0, 512); return 0;
+                }
+                int canvas_x = dcx + 8, canvas_y = palette_y + 40;
+                int canvas_w = dcw - 16, canvas_h = (w->h - TITLEBAR_H - 8) - 52;
+                int cell_w = canvas_w / 64; int cell_h = canvas_h / 48;
+                if (cell_w < 2) cell_w = 2; if (cell_h < 2) cell_h = 2;
+                if (mx >= canvas_x && mx < canvas_x+canvas_w && my >= canvas_y && my < canvas_y+canvas_h) {
+                    int gx2 = (mx - canvas_x) / cell_w;
+                    int gy2 = (my - canvas_y) / cell_h;
+                    if (gx2 >= 0 && gx2 < 64 && gy2 >= 0 && gy2 < 48) {
+                        int idx = gy2 * 64 + gx2;
+                        if (idx < 512) w->note_text[idx] = (char)(w->calc_v1 + 1);
+                    }
+                    return 0;
+                }
+            }
+            /* SwanClock — button clicks */
+            if (w->type == WIN_CLOCK) {
+                int ccx2 = w->x+4, ccw2 = w->w-8;
+                int clock_cy2 = w->y+TITLEBAR_H+4 + 120;
+                int sep_y2 = clock_cy2 + 90 + 40;
+                int sw_y2 = sep_y2 + 12 + CH + 8 + CH + 12;
+                int bw2 = 100, bh2 = 32;
+                int btn1x = ccx2 + ccw2/2 - bw2 - 10;
+                int btn2x = ccx2 + ccw2/2 + 10;
+                if (mx >= btn1x && mx < btn1x+bw2 && my >= sw_y2 && my < sw_y2+bh2) {
+                    w->calc_op = !w->calc_op; return 0;
+                }
+                if (mx >= btn2x && mx < btn2x+bw2 && my >= sw_y2 && my < sw_y2+bh2) {
+                    w->calc_v1 = 0; w->calc_op = 0; return 0;
                 }
             }
             return 0;
@@ -1946,6 +2261,27 @@ static void draw_widgets(void) {
         strcpy(abuf, ""); itoa(audit_get_count(), atmp, 10); strcat(abuf, atmp); strcat(abuf, " events");
         vga_bb_draw_string(sx+16, sy+132, abuf, S_NEON_MAGENTA, 0);
     }
+
+    /* Security Shield Widget */
+    {
+        int shx = SCRW - 180, shy = 404;
+        ui_card(shx, shy, 160, 110, 12, 0x35FFFFFF);
+        ui_neon_border(shx, shy, 160, 110, 12, S_GREEN);
+        /* Shield icon */
+        vga_bb_fill_rounded_rect(shx+16, shy+12, 20, 24, 6, S_GREEN);
+        vga_bb_fill_rounded_rect(shx+18, shy+14, 16, 20, 4, S_BG_DEEP);
+        vga_bb_draw_string_2x(shx+22, shy+17, "S", S_GREEN, 0);
+        vga_bb_draw_string_2x(shx+42, shy+14, "SECURE", S_GREEN, 0);
+        vga_bb_draw_hline(shx+16, shy+42, 128, S_SEPARATOR);
+        vga_bb_draw_string(shx+16, shy+50, "Ring 3 Isolation", S_TEXT_DIM, 0);
+        ui_status_dot(shx+130, shy+54, 4, S_GREEN);
+        vga_bb_draw_string(shx+16, shy+64, "Kernel Protected", S_TEXT_DIM, 0);
+        ui_status_dot(shx+130, shy+68, 4, S_GREEN);
+        vga_bb_draw_string(shx+16, shy+78, "Memory Guarded", S_TEXT_DIM, 0);
+        ui_status_dot(shx+130, shy+82, 4, S_GREEN);
+        vga_bb_draw_string(shx+16, shy+92, "Audit Active", S_TEXT_DIM, 0);
+        ui_status_dot(shx+130, shy+96, 4, S_GREEN);
+    }
 }
 
 static void draw_workspace_indicator(void) {
@@ -1985,6 +2321,9 @@ void desktop_run(void) {
     memset(windows,0,sizeof(windows)); win_count=0; win_focus=-1; win_order_count=0; kickoff_open=0; dragging=0; wp_cached=0;
     memset(toasts, 0, sizeof(toasts));
     audit_log(AUDIT_SYSTEM, "Desktop started");
+    /* Welcome splash */
+    toast_show("Welcome to SwanOS!", S_NEON_CYAN);
+    toast_show("Where Love Meets Technology", S_PINK);
     open_window(WIN_ABOUT); open_window(WIN_TERM);
     draw_desktop();
     uint32_t last_draw=0; int needs_redraw=1;
@@ -2076,6 +2415,31 @@ void desktop_run(void) {
             needs_redraw = 1;
         }
 
+        /* SwanClock: force redraw while stopwatch is running */
+        for (int i=0; i<MAX_WINDOWS; i++) {
+            if (windows[i].active && windows[i].type == WIN_CLOCK && windows[i].clock_sw_running)
+                needs_redraw = 1;
+        }
+
+        /* SwanDraw: continuous painting while mouse held down */
+        if ((ms.buttons & 1) && !dragging && win_focus >= 0 && windows[win_focus].active && windows[win_focus].type == WIN_DRAW) {
+            window_t *dw = &windows[win_focus];
+            int dcx3 = dw->x+4, dcy3 = dw->y+TITLEBAR_H+4, dcw3 = dw->w-8;
+            int pal_y3 = dcy3 + 4;
+            int cvx3 = dcx3 + 8, cvy3 = pal_y3 + 40;
+            int cvw3 = dcw3 - 16, cvh3 = dw->h - TITLEBAR_H - 8 - 52;
+            int cew3 = cvw3 / 64; if (cew3 < 2) cew3 = 2;
+            int ceh3 = cvh3 / 48; if (ceh3 < 2) ceh3 = 2;
+            if (ms.x >= cvx3 && ms.x < cvx3 + 64*cew3 && ms.y >= cvy3 && ms.y < cvy3 + 48*ceh3) {
+                int ppx = (ms.x - cvx3) / cew3;
+                int ppy = (ms.y - cvy3) / ceh3;
+                if (ppx >= 0 && ppx < 64 && ppy >= 0 && ppy < 48) {
+                    int pidx = ppy * 64 + ppx;
+                    if (pidx < 512) { dw->note_text[pidx] = (char)(dw->draw_color + 1); needs_redraw = 1; }
+                }
+            }
+        }
+
         /* Sysmon history update (every 1 second roughly = 100 ticks at 100Hz) */
         if (ticks - sysmon_tick > 100) {
             for (int i=0; i<MAX_WINDOWS; i++) {
@@ -2098,6 +2462,13 @@ void desktop_run(void) {
             sysmon_tick = ticks;
             /* Periodic user profile save */
             user_periodic_save();
+            /* Stopwatch tick for SwanClock */
+            for (int i=0; i<MAX_WINDOWS; i++) {
+                if (windows[i].active && windows[i].type == WIN_CLOCK && windows[i].calc_op) {
+                    windows[i].calc_v1++;
+                    needs_redraw = 1;
+                }
+            }
         }
 
         /* Cursor blink — only trigger redraw if a text-input window is focused */
