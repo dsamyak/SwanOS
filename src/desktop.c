@@ -23,6 +23,7 @@
 #include "network.h"
 #include "ui_theme.h"
 #include "audit.h"
+#include "kernel_ai.h"
 
 /* ── Layout ───────────────────────────────────────────────── */
 #define SCRW       GFX_W
@@ -645,6 +646,57 @@ static void draw_panel(void) {
             ui_tooltip(tx + mem_grp_w/2, dock_y, mtip, S_BG_LIGHT, S_TEXT);
         }
         tx += mem_grp_w + 10;
+    }
+
+    ui_divider_v(tx-3, dock_y+12, PANEL_H-24, 0x30FFFFFF);
+    tx += 5;
+
+    /* ── 1b. CPU% + Process count ── */
+    {
+        int cpu_w = 48;
+        int cpu_hover = (msx >= tx-4 && msx < tx+cpu_w+4 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+        ui_tray_icon_bg(tx-4, dock_y+8, cpu_w+8, PANEL_H-16, cpu_hover);
+        int nprocs = process_count_active();
+        char cpulbl[8]; itoa(nprocs, cpulbl, 10);
+        vga_bb_draw_string_2x(tx+4, dock_y+12, cpulbl, S_NEON_CYAN, 0x00000000);
+        vga_bb_draw_string(tx+4, dock_y+32, "PROC", S_TEXT_DIM, 0x00000000);
+        if (cpu_hover && !rearrange_mode) {
+            char ctip[24]; strcpy(ctip, ""); itoa(nprocs, ctip, 10); strcat(ctip, " processes");
+            ui_tooltip(tx + cpu_w/2, dock_y, ctip, S_BG_LIGHT, S_TEXT);
+        }
+        tx += cpu_w + 10;
+    }
+
+    ui_divider_v(tx-3, dock_y+12, PANEL_H-24, 0x30FFFFFF);
+    tx += 5;
+
+    /* ── 1c. AI Status LED ── */
+    {
+        int ai_w = 24;
+        const kernel_ai_status_t *ais = kernel_ai_get_status();
+        int ai_hover = (msx >= tx-4 && msx < tx+ai_w+4 && msy >= dock_y+4 && msy < dock_y+PANEL_H-4);
+        ui_tray_icon_bg(tx-4, dock_y+8, ai_w+8, PANEL_H-16, ai_hover);
+        /* Pulsing AI orb */
+        int ai_pulse = sine_approx((dock_anim_tick * 6) % 360);
+        int ai_a = 0x60 + (ai_pulse * 0x30) / 100;
+        if (ais->query_pending) ai_a = 0xC0; /* Bright when thinking */
+        uint32_t ai_c = ais->connected ? S_NEON_PURPLE : S_RED;
+        uint32_t ai_glow2 = ((uint32_t)ai_a << 24) | (ai_c & 0x00FFFFFF);
+        vga_bb_fill_circle(tx+ai_w/2, dock_y+PANEL_H/2, 10, ai_glow2);
+        vga_bb_fill_circle(tx+ai_w/2, dock_y+PANEL_H/2, 6, ai_c);
+        vga_bb_fill_circle(tx+ai_w/2, dock_y+PANEL_H/2, 3, S_BG_DEEP);
+        if (ais->query_pending) {
+            /* Spinning dots when thinking */
+            int sdeg = (dock_anim_tick * 12) % 360;
+            int sdx = (sine_approx((sdeg+90)%360) * 8) / 100;
+            int sdy = -(sine_approx(sdeg%360) * 8) / 100;
+            vga_bb_fill_circle(tx+ai_w/2 + sdx, dock_y+PANEL_H/2 + sdy, 2, S_NEON_CYAN);
+        }
+        if (ai_hover && !rearrange_mode) {
+            const char *atip = ais->connected ? (ais->query_pending ? "AI: Thinking..." : "AI: Online") : "AI: Offline";
+            ui_tooltip(tx + ai_w/2, dock_y, atip, S_BG_LIGHT, S_TEXT);
+        }
+        tx += ai_w + 6;
     }
 
     ui_divider_v(tx-3, dock_y+12, PANEL_H-24, 0x30FFFFFF);
@@ -1284,24 +1336,140 @@ static void draw_window(int wi) {
     }
     else if (w->type == WIN_SYSMON) {
         vga_bb_fill_rect(cx, cy, cw, ch, B_BG_DARK);
-        vga_bb_draw_string_2x(cx+10, cy+10, "Memory Usage History", B_ACCENT, 0x00000000);
-        vga_bb_draw_hline(cx+10, cy+40, cw-20, B_SEPARATOR);
-        int g_x = cx+20, g_y = cy+60, g_w = cw-40, g_h = ch-120;
+        /* ── Header with live indicators ── */
+        vga_bb_fill_rect(cx, cy, cw, 36, B_BG_ALT);
+        vga_bb_fill_circle(cx+20, cy+18, 6, S_RED);
+        vga_bb_draw_string_2x(cx+32, cy+10, "Heartbeat", S_RED, 0x00000000);
+        /* Process count badge */
+        process_overview_t pov; process_get_overview(&pov);
+        char pcnt[12]; char ptmp[4]; strcpy(pcnt, ""); itoa(pov.count, ptmp, 10); strcat(pcnt, ptmp); strcat(pcnt, " procs");
+        int pcw = (int)strlen(pcnt) * CW;
+        vga_bb_fill_rounded_rect(cx+cw-pcw-20, cy+6, pcw+12, CH+4, 6, S_NEON_CYAN);
+        vga_bb_draw_string_2x(cx+cw-pcw-14, cy+8, pcnt, B_BG_DARK, 0x00000000);
+        /* Context switches */
+        char csbuf[16]; char cstmp[8]; strcpy(csbuf, "ctx:"); itoa(pov.context_switches, cstmp, 10); strcat(csbuf, cstmp);
+        vga_bb_draw_string_2x(cx+200, cy+10, csbuf, B_TEXT_DIM, 0x00000000);
+        vga_bb_draw_hline(cx, cy+36, cw, B_SEPARATOR);
+        /* ── Memory sparkline ── */
+        int g_x = cx+10, g_y = cy+42, g_w = cw/2-20, g_h = 60;
+        vga_bb_draw_string_2x(g_x, g_y, "MEMORY", S_GREEN, 0x00000000);
+        g_y += CH + 4;
         vga_bb_fill_rect(g_x, g_y, g_w, g_h, B_WIN_BG);
         vga_bb_draw_rect_outline(g_x, g_y, g_w, g_h, B_BORDER);
         int max_m = mem_total() / 1024; if (max_m <= 0) max_m = 131072;
-        int bar_w = g_w / 60;
-        for (int i=0; i<60; i++) {
+        int bar_w_m = g_w / 60; if (bar_w_m < 1) bar_w_m = 1;
+        for (int i=0; i<60 && i*bar_w_m < g_w; i++) {
             int val = w->sysmon_history[(w->sysmon_head + i) % 60];
             if (val > 0) {
                 int bh = (val * g_h) / max_m; if (bh > g_h) bh = g_h;
                 uint32_t bc = B_GREEN; if (bh > g_h/2) bc = B_YELLOW; if (bh > (g_h*4)/5) bc = B_RED;
-                vga_bb_fill_rect(g_x + i*bar_w + 1, g_y + g_h - bh, bar_w-2, bh, bc);
+                vga_bb_fill_rect(g_x + i*bar_w_m + 1, g_y + g_h - bh, bar_w_m > 1 ? bar_w_m-1 : 1, bh, bc);
             }
         }
-        char mtext[60]; char tmp[16]; strcpy(mtext, "Used: "); itoa(mem_used()/1024, tmp, 10); strcat(mtext, tmp);
-        strcat(mtext, " KB / "); itoa(max_m, tmp, 10); strcat(mtext, tmp); strcat(mtext, " KB");
-        vga_bb_draw_string_2x(cx+20, cy+ch-40, mtext, B_TEXT, 0x00000000);
+        int mem_pct2 = (mem_total() > 0) ? (mem_used() * 100) / mem_total() : 0;
+        char mpct[8]; itoa(mem_pct2, mpct, 10); strcat(mpct, "%");
+        vga_bb_draw_string_2x(g_x + g_w + 8, g_y + 4, mpct, mem_pct2 > 80 ? S_RED : (mem_pct2 > 50 ? S_YELLOW : S_GREEN), 0x00000000);
+        char mtext[40]; char tmp[12]; strcpy(mtext, ""); itoa(mem_used()/1024, tmp, 10); strcat(mtext, tmp);
+        strcat(mtext, "/"); itoa(max_m, tmp, 10); strcat(mtext, tmp); strcat(mtext, "K");
+        vga_bb_draw_string_2x(g_x + g_w + 8, g_y + CH + 8, mtext, B_TEXT_DIM, 0x00000000);
+        /* ── AI Status panel (right half) ── */
+        int ax = cx + cw/2 + 10, ay = cy+42;
+        vga_bb_draw_string_2x(ax, ay, "AI ADVISOR", S_NEON_PURPLE, 0x00000000);
+        ay += CH + 4;
+        const kernel_ai_status_t *ais = kernel_ai_get_status();
+        /* Connection LED */
+        vga_bb_fill_circle(ax+8, ay+8, 6, ais->connected ? S_GREEN : S_RED);
+        if (ais->connected) vga_bb_fill_circle_alpha(ax+8, ay+8, 10, 0x20000000 | (S_GREEN & 0x00FFFFFF));
+        vga_bb_draw_string_2x(ax+20, ay, ais->connected ? "Connected" : "Offline", ais->connected ? S_GREEN : S_RED, 0x00000000);
+        ay += CH + 4;
+        /* Latency */
+        char lbuf[20]; strcpy(lbuf, "Latency: "); itoa(ais->last_latency_ms, tmp, 10); strcat(lbuf, tmp); strcat(lbuf, "ms");
+        vga_bb_draw_string_2x(ax, ay, lbuf, B_TEXT_DIM, 0x00000000);
+        ay += CH + 2;
+        /* Queries */
+        char qbuf[20]; strcpy(qbuf, "Queries: "); itoa(ais->queries_total, tmp, 10); strcat(qbuf, tmp);
+        vga_bb_draw_string_2x(ax, ay, qbuf, B_TEXT_DIM, 0x00000000);
+        ay += CH + 2;
+        /* Telemetry */
+        char tbuf2[20]; strcpy(tbuf2, "Telemetry: "); itoa(ais->telemetry_sent, tmp, 10); strcat(tbuf2, tmp);
+        vga_bb_draw_string_2x(ax, ay, tbuf2, B_TEXT_DIM, 0x00000000);
+        ay += CH + 4;
+        /* Pending indicator */
+        if (ais->query_pending) {
+            int pls = sine_approx((timer_get_ticks() * 8) % 360);
+            int pa = 0x80 + (pls * 0x40) / 100;
+            uint32_t pc2 = ((uint32_t)pa << 24) | (S_NEON_PURPLE & 0x00FFFFFF);
+            vga_bb_fill_circle(ax+8, ay+8, 6, pc2);
+            vga_bb_draw_string_2x(ax+20, ay, "AI Thinking...", S_NEON_PURPLE, 0x00000000);
+            ay += CH + 4;
+        }
+        /* ── Process List (bottom section) ── */
+        int py2 = g_y + g_h + 8;
+        vga_bb_draw_hline(cx+8, py2, cw-16, B_SEPARATOR);
+        py2 += 6;
+        /* Column headers */
+        vga_bb_fill_rect(cx+4, py2, cw-8, CH+4, B_BG_ALT);
+        vga_bb_draw_string_2x(cx+10, py2+2, "PID", B_TEXT_DIM, 0x00000000);
+        vga_bb_draw_string_2x(cx+60, py2+2, "Name", B_TEXT_DIM, 0x00000000);
+        vga_bb_draw_string_2x(cx+220, py2+2, "State", B_TEXT_DIM, 0x00000000);
+        vga_bb_draw_string_2x(cx+330, py2+2, "Pri", B_TEXT_DIM, 0x00000000);
+        vga_bb_draw_string_2x(cx+410, py2+2, "CPU%", B_TEXT_DIM, 0x00000000);
+        vga_bb_draw_hline(cx+4, py2+CH+4, cw-8, B_SEPARATOR);
+        py2 += CH + 8;
+        /* Process rows */
+        int max_rows = (cy + ch - py2 - 8) / (CH + 4);
+        for (int pi = 0; pi < pov.count && pi < max_rows; pi++) {
+            process_stats_t *ps = &pov.procs[pi];
+            if ((pi % 2) == 0) vga_bb_fill_rect(cx+4, py2-2, cw-8, CH+4, 0x08FFFFFF);
+            /* PID */
+            char pidbuf[8]; itoa(ps->pid, pidbuf, 10);
+            vga_bb_draw_string_2x(cx+10, py2, pidbuf, B_TEXT, 0x00000000);
+            /* Name */
+            vga_bb_draw_string_2x(cx+60, py2, ps->name, S_NEON_CYAN, 0x00000000);
+            /* State */
+            const char *sname = "?";
+            uint32_t scol = B_TEXT_DIM;
+            switch (ps->state) {
+                case 1: sname = "RUN"; scol = S_GREEN; break;
+                case 2: sname = "READY"; scol = S_YELLOW; break;
+                case 3: sname = "BLOCK"; scol = S_RED; break;
+            }
+            vga_bb_draw_string_2x(cx+220, py2, sname, scol, 0x00000000);
+            /* Priority */
+            const char *pname = "-";
+            uint32_t pcol = B_TEXT_DIM;
+            switch (ps->priority) {
+                case 0: pname = "IDLE"; pcol = B_TEXT_DIM; break;
+                case 1: pname = "LOW"; pcol = S_YELLOW; break;
+                case 2: pname = "NORM"; pcol = S_GREEN; break;
+                case 3: pname = "HIGH"; pcol = S_RED; break;
+            }
+            vga_bb_draw_string_2x(cx+330, py2, pname, pcol, 0x00000000);
+            /* CPU% with bar */
+            char cpubuf[8]; itoa(ps->cpu_percent, cpubuf, 10); strcat(cpubuf, "%");
+            uint32_t cpucol = S_GREEN;
+            if (ps->cpu_percent > 60) cpucol = S_YELLOW;
+            if (ps->cpu_percent > 80) cpucol = S_RED;
+            vga_bb_draw_string_2x(cx+410, py2, cpubuf, cpucol, 0x00000000);
+            /* Mini CPU bar */
+            int bw2 = 60; int bh2 = 6;
+            int bx2 = cx+410+4*CW+4;
+            if (bx2 + bw2 < cx + cw - 8) {
+                vga_bb_fill_rect(bx2, py2+5, bw2, bh2, B_BG_ALT);
+                int filled2 = (ps->cpu_percent * bw2) / 100;
+                if (filled2 > bw2) filled2 = bw2;
+                vga_bb_fill_rect(bx2, py2+5, filled2, bh2, cpucol);
+            }
+            py2 += CH + 4;
+        }
+        /* Bottom status bar */
+        vga_bb_fill_rect(cx, cy+ch-28, cw, 28, B_BG_ALT);
+        vga_bb_draw_hline(cx, cy+ch-28, cw, B_SEPARATOR);
+        char ftext[60]; strcpy(ftext, ""); itoa(mem_used()/1024, tmp, 10); strcat(ftext, tmp);
+        strcat(ftext, "K / "); itoa(max_m, tmp, 10); strcat(ftext, tmp);
+        strcat(ftext, "K | Procs: "); itoa(pov.count, tmp, 10); strcat(ftext, tmp);
+        strcat(ftext, " | AI: "); strcat(ftext, ais->connected ? "ON" : "OFF");
+        vga_bb_draw_string_2x(cx+10, cy+ch-22, ftext, B_TEXT_DIM, 0x00000000);
     }
     else if (w->type == WIN_STORE) {
         vga_bb_fill_rect(cx, cy, cw, ch, B_BG_DARK);
@@ -1826,7 +1994,7 @@ static void open_window(int type) {
         case WIN_AI: strcpy(w->title,"SwanSoul"); w->x=240;w->y=80;w->w=840;w->h=620;
             term_add_line(w,"SwanSoul AI"); term_add_line(w,"Ask me anything!"); break;
         case WIN_CALC: strcpy(w->title,"SwanCount"); w->x=500;w->y=160;w->w=320;w->h=460; w->input[0]='0'; w->input[1]='\0'; w->calc_new=1; break;
-        case WIN_SYSMON: strcpy(w->title,"Heartbeat"); w->x=600;w->y=300;w->w=560;w->h=380; w->sysmon_head=0; memset(w->sysmon_history,0,sizeof(w->sysmon_history)); break;
+        case WIN_SYSMON: strcpy(w->title,"Heartbeat"); w->x=200;w->y=100;w->w=860;w->h=580; w->sysmon_head=0; memset(w->sysmon_history,0,sizeof(w->sysmon_history)); break;
         case WIN_STORE: strcpy(w->title,"SwanNest"); w->x=200;w->y=60;w->w=860;w->h=560; w->store_sel=0; memset(w->store_downloaded,0,sizeof(w->store_downloaded)); break;
         case WIN_BROWSER: strcpy(w->title,"SwanLake"); w->x=180;w->y=40;w->w=900;w->h=640; w->browser_tab=0; break;
         case WIN_NETWORK: strcpy(w->title,"WingLink"); w->x=300;w->y=100;w->w=700;w->h=580; break;
@@ -2231,8 +2399,8 @@ static void draw_widgets(void) {
 
     /* Stats Widget with session timer */
     int sx = SCRW - 180, sy = 240;
-    ui_card(sx, sy, 160, 150, 12, 0x35FFFFFF);
-    ui_neon_border(sx, sy, 160, 150, 12, S_NEON_PURPLE);
+    ui_card(sx, sy, 160, 170, 12, 0x35FFFFFF);
+    ui_neon_border(sx, sy, 160, 170, 12, S_NEON_PURPLE);
     vga_bb_draw_string_2x(sx+16, sy+12, "SYSTEM", S_TEXT, 0);
     int pct = (mem_total() > 0) ? (mem_used() * 100) / mem_total() : 0;
     vga_bb_draw_string(sx+16, sy+36, "Memory", S_TEXT_DIM, 0);
@@ -2240,9 +2408,16 @@ static void draw_widgets(void) {
     char mbuf[32]; strcpy(mbuf, ""); char nb[10]; itoa(mem_used()/1024, nb, 10); strcat(mbuf, nb); strcat(mbuf, " / ");
     itoa(mem_total()/1024, nb, 10); strcat(mbuf, nb); strcat(mbuf, " KB");
     vga_bb_draw_string(sx+16, sy+66, mbuf, S_TEXT_DIM, 0);
+    /* Process count */
+    vga_bb_draw_hline(sx+16, sy+80, 128, S_SEPARATOR);
+    {
+        int pc = process_count_active();
+        char pbuf[20]; strcpy(pbuf, "Procs: "); char pn[8]; itoa(pc, pn, 10); strcat(pbuf, pn);
+        vga_bb_draw_string(sx+16, sy+88, pbuf, S_TEXT_DIM, 0);
+    }
     /* Session timer */
-    vga_bb_draw_hline(sx+16, sy+82, 128, S_SEPARATOR);
-    vga_bb_draw_string(sx+16, sy+90, "Session", S_TEXT_DIM, 0);
+    vga_bb_draw_hline(sx+16, sy+100, 128, S_SEPARATOR);
+    vga_bb_draw_string(sx+16, sy+108, "Session", S_TEXT_DIM, 0);
     {
         uint32_t ss = user_session_seconds();
         uint32_t sm = ss / 60; uint32_t sh = sm / 60;
@@ -2252,19 +2427,19 @@ static void draw_widgets(void) {
         itoa(sh, stmp, 10); strcat(stbuf, stmp); strcat(stbuf, "h ");
         itoa(sm, stmp, 10); strcat(stbuf, stmp); strcat(stbuf, "m ");
         itoa(ss, stmp, 10); strcat(stbuf, stmp); strcat(stbuf, "s");
-        vga_bb_draw_string_2x(sx+16, sy+104, stbuf, S_NEON_CYAN, 0);
+        vga_bb_draw_string_2x(sx+16, sy+122, stbuf, S_NEON_CYAN, 0);
     }
     /* Audit event count */
-    vga_bb_draw_hline(sx+16, sy+124, 128, S_SEPARATOR);
+    vga_bb_draw_hline(sx+16, sy+142, 128, S_SEPARATOR);
     {
         char abuf[20]; char atmp[8];
         strcpy(abuf, ""); itoa(audit_get_count(), atmp, 10); strcat(abuf, atmp); strcat(abuf, " events");
-        vga_bb_draw_string(sx+16, sy+132, abuf, S_NEON_MAGENTA, 0);
+        vga_bb_draw_string(sx+16, sy+150, abuf, S_NEON_MAGENTA, 0);
     }
 
     /* Security Shield Widget */
     {
-        int shx = SCRW - 180, shy = 404;
+        int shx = SCRW - 180, shy = 424;
         ui_card(shx, shy, 160, 110, 12, 0x35FFFFFF);
         ui_neon_border(shx, shy, 160, 110, 12, S_GREEN);
         /* Shield icon */
@@ -2281,6 +2456,49 @@ static void draw_widgets(void) {
         ui_status_dot(shx+130, shy+82, 4, S_GREEN);
         vga_bb_draw_string(shx+16, shy+92, "Audit Active", S_TEXT_DIM, 0);
         ui_status_dot(shx+130, shy+96, 4, S_GREEN);
+    }
+
+    /* AI Advisor Widget */
+    {
+        int aix = SCRW - 180, aiy = 548;
+        const kernel_ai_status_t *ais = kernel_ai_get_status();
+        ui_card(aix, aiy, 160, 140, 12, 0x35FFFFFF);
+        ui_neon_border(aix, aiy, 160, 140, 12, S_NEON_PURPLE);
+        /* Header with pulsing AI indicator */
+        int pulse2 = sine_approx((timer_get_ticks() * 6) % 360);
+        int p_alpha = 0x60 + (pulse2 * 0x30) / 100;
+        uint32_t ai_glow = ((uint32_t)p_alpha << 24) | (S_NEON_PURPLE & 0x00FFFFFF);
+        vga_bb_fill_circle(aix+20, aiy+20, 8, ai_glow);
+        vga_bb_fill_circle(aix+20, aiy+20, 5, S_NEON_PURPLE);
+        vga_bb_fill_circle(aix+20, aiy+20, 3, S_BG_DEEP);
+        /* Connection status */
+        vga_bb_draw_string_2x(aix+36, aiy+12, "AI", S_NEON_PURPLE, 0);
+        vga_bb_fill_circle(aix+76, aiy+16, 4, ais->connected ? S_GREEN : S_RED);
+        /* Latency */
+        {
+            char lbuf2[20]; char lt[8];
+            strcpy(lbuf2, ""); itoa(ais->last_latency_ms, lt, 10); strcat(lbuf2, lt); strcat(lbuf2, "ms");
+            vga_bb_draw_string(aix+90, aiy+14, lbuf2, S_TEXT_DIM, 0);
+        }
+        vga_bb_draw_hline(aix+16, aiy+32, 128, S_SEPARATOR);
+        /* Rolling advice feed */
+        int ady = aiy + 38;
+        for (int ai = 0; ai < AI_MAX_ADVICE && ady + 12 < aiy + 140; ai++) {
+            const char *adv = kernel_ai_get_advice(ai);
+            if (adv[0]) {
+                uint32_t ac = (ai == 0) ? S_NEON_CYAN : S_TEXT_DIM;
+                vga_bb_fill_circle(aix+12, ady+4, 2, ac);
+                vga_bb_draw_string(aix+20, ady, adv, ac, 0);
+                ady += 14;
+            }
+        }
+        /* Queries count at bottom */
+        {
+            char qb[20]; char qt[8];
+            strcpy(qb, "Q:"); itoa(ais->queries_total, qt, 10); strcat(qb, qt);
+            strcat(qb, " T:"); itoa(ais->telemetry_sent, qt, 10); strcat(qb, qt);
+            vga_bb_draw_string(aix+16, aiy+124, qb, S_TEXT_DIM, 0);
+        }
     }
 }
 

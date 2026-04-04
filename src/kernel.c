@@ -25,6 +25,7 @@
 #include "llm.h"
 #include "network.h"
 #include "audit.h"
+#include "kernel_ai.h"
 
 /* ── Advanced Boot Splash ────────────────────────────────── */
 /* Particle system, neural network nodes, pulsing rings,
@@ -287,7 +288,7 @@ static void gfx_boot_splash(void) {
 /* ── Styled Text-mode Boot Sequence ─────────────────────── */
 
 static int boot_step = 0;
-#define BOOT_TOTAL 8
+#define BOOT_TOTAL 17
 
 /* Draw the boot progress bar at the bottom */
 static void draw_boot_progress(void) {
@@ -469,13 +470,13 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
     boot_status("Interrupt Descriptor Table loaded");
 
     process_init();
-    boot_status("Process scheduler initialized");
+    boot_status("Dynamic process scheduler initialized (priority-based)");
 
     syscall_init();
     boot_status("System calls (int 0x80) enabled");
 
     timer_init(100);
-    boot_status("PIT timer @ 100 Hz");
+    boot_status("PIT timer @ 100 Hz (periodic callbacks enabled)");
 
     serial_init();
     boot_status("COM1 serial port ready");
@@ -484,7 +485,7 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
     boot_status("PS/2 keyboard driver loaded");
 
     memory_init();
-    boot_status("Memory allocator ready (4 MB heap)");
+    boot_status("Memory allocator ready (8 MB heap)");
 
     paging_init();
     boot_status("Virtual memory paging enabled");
@@ -508,9 +509,18 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
 
     llm_init();
     if (llm_ready())
-        boot_status("Groq LLM engine initialized (API key loaded)");
+        boot_status("Groq LLM engine online (async + streaming)");
     else
-        boot_status("Groq LLM engine initialized (no API key - use 'setkey')");
+        boot_status("Groq LLM engine ready (no API key - use 'setkey')");
+
+    kernel_ai_init();
+    /* Register AI tick callback: fires every 500 ticks (~5 seconds) */
+    timer_register_periodic(500, kernel_ai_tick);
+    boot_status("AI Kernel Advisor active (realtime telemetry)");
+
+    /* Register process CPU window reset: every 100 ticks (~1s) */
+    timer_register_periodic(100, process_cpu_window_reset);
+    boot_status("CPU accounting enabled (1s window)");
 
     net_init();
     if (net_get_status()->detected)
@@ -527,7 +537,7 @@ void kernel_main(uint32_t magic, uint32_t mboot_info_addr) {
     screen_putchar((char)254);
     screen_print(" All systems online");
     screen_set_color(VGA_DARK_GREY, VGA_BLACK);
-    screen_print("  ─  Ready\n");
+    screen_print("  ─  AI-Powered Realtime OS Ready\n");
     screen_set_color(VGA_WHITE, VGA_BLACK);
 
     int mode = select_mode();
