@@ -24,6 +24,7 @@
 #include "ui_theme.h"
 #include "audit.h"
 #include "kernel_ai.h"
+#include "process.h"
 
 /* ── Layout ───────────────────────────────────────────────── */
 #define SCRW       GFX_W
@@ -76,6 +77,7 @@
 #define WIN_AUDIT 10
 #define WIN_DRAW 11
 #define WIN_CLOCK 12
+#define WIN_CMDPAL 13  /* AI Command Palette overlay (not a real window) */
 
 #define ICON_W     80
 #define ICON_H     80
@@ -190,6 +192,30 @@ static uint32_t wp_buf[1920 * 1080];
 static uint32_t wp_phase = 0;
 static uint32_t wp_last_tick = 0;
 
+/* ── Accessibility & AI Palette State ─────────────────────── */
+static int narrator_active = 0;           /* F1 toggle */
+static char narrator_text[80] = "";       /* Current narrator description */
+static uint32_t narrator_fade_tick = 0;   /* When narrator text last changed */
+
+static int high_contrast_mode = 0;        /* F2 toggle */
+
+static int cmdpal_open = 0;               /* Ctrl+Space toggle */
+static char cmdpal_input[80] = "";        /* Command palette input */
+static int cmdpal_input_pos = 0;          /* Input cursor position */
+static char cmdpal_result[128] = "";      /* AI response text */
+static int cmdpal_has_result = 0;         /* Has a result to show? */
+static int cmdpal_thinking = 0;           /* AI query in flight? */
+static int cmdpal_action = 0;             /* Pending action from intent */
+static int cmdpal_action_app = -1;        /* App to open from intent */
+
+static char suggestion_text[64] = "";     /* Ghost text suggestion */
+static int suggestion_active = 0;         /* Showing suggestion? */
+static uint32_t suggestion_tick = 0;      /* Last keystroke tick */
+
+static char health_summary[80] = "";      /* AI health summary text */
+static uint32_t health_tick = 0;          /* Last health update tick */
+static int health_typewriter_pos = 0;     /* Typewriter animation position */
+
 /* ── Forward declarations ─────────────────────────────────── */
 static void open_window(int type);
 static void draw_desktop(void);
@@ -197,6 +223,9 @@ static int  handle_click(int mx, int my);
 static void term_add_line(window_t *w, const char *text);
 static void term_process_cmd(window_t *w);
 static int  sine_approx(int deg);
+static void draw_narrator_bar(void);
+static void draw_command_palette(void);
+static void draw_health_widget(void);
 
 /* ── Wallpaper ────────────────────────────────────────────── */
 static void render_wallpaper(void) {
@@ -391,8 +420,18 @@ static void draw_icons(void) {
         int lx = gx + (72 - lw) / 2;
         if (lx < 2) lx = 2;
         int ly_off = hovered ? -2 : 0;
+        /* High-contrast: add background rectangle behind label */
+        if (high_contrast_mode) {
+            vga_bb_fill_rounded_rect(lx-4, gy+58+ly_off, lw+8, CH+6, 4, 0xE0000000);
+        }
         vga_bb_draw_string_2x(lx+1, gy+62+ly_off, ic->label, 0x80000000, 0x00000000);
         vga_bb_draw_string_2x(lx, gy+61+ly_off, ic->label, hovered ? 0xFFFFFFFF : B_TEXT, 0x00000000);
+        /* Narrator: update description when hovering over icon */
+        if (hovered && narrator_active) {
+            strncpy(narrator_text, kernel_ai_get_app_description(ic->app_id), 79);
+            narrator_text[79] = '\0';
+            narrator_fade_tick = timer_get_ticks();
+        }
     }
 }
 
@@ -464,11 +503,17 @@ static void draw_panel(void) {
     ui_soft_shadow(dock_x, dock_y, dock_w, PANEL_H, 22, 7);
 
     /* Glass panel with deeper transparency */
-    vga_bb_fill_rounded_rect(dock_x, dock_y, dock_w, PANEL_H, 18, 0x40081020);
-    /* Secondary frosted glass layer */
-    vga_bb_fill_rounded_rect(dock_x+1, dock_y+1, dock_w-2, PANEL_H-2, 17, 0x18FFFFFF);
-    /* Inner highlight reflection strip (top edge) */
-    vga_bb_fill_rounded_rect(dock_x+4, dock_y+2, dock_w-8, 2, 1, 0x15FFFFFF);
+    if (high_contrast_mode) {
+        /* High-contrast: solid opaque dock for maximum readability */
+        vga_bb_fill_rounded_rect(dock_x, dock_y, dock_w, PANEL_H, 18, 0xF00A1428);
+        vga_bb_draw_rect_outline(dock_x, dock_y, dock_w, PANEL_H, 0xFFFFFFFF);
+    } else {
+        vga_bb_fill_rounded_rect(dock_x, dock_y, dock_w, PANEL_H, 18, 0x40081020);
+        /* Secondary frosted glass layer */
+        vga_bb_fill_rounded_rect(dock_x+1, dock_y+1, dock_w-2, PANEL_H-2, 17, 0x18FFFFFF);
+        /* Inner highlight reflection strip (top edge) */
+        vga_bb_fill_rounded_rect(dock_x+4, dock_y+2, dock_w-8, 2, 1, 0x15FFFFFF);
+    }
 
     /* Animated rainbow neon border */
     int phase = (dock_anim_tick * 4) % 768;
@@ -1134,8 +1179,16 @@ static void draw_window(int wi) {
         uint32_t glow_c = ((uint32_t)glow_a << 24) | (S_NEON_CYAN & 0x00FFFFFF);
         vga_bb_draw_rect_outline(w->x-1, w->y-1, w->w+2, w->h+2, glow_c);
         ui_neon_border(w->x, w->y, w->w, w->h, 10, S_NEON_CYAN);
+        /* High-contrast: extra thick bright border */
+        if (high_contrast_mode) {
+            vga_bb_draw_rect_outline(w->x-2, w->y-2, w->w+4, w->h+4, 0xFFFFFFFF);
+            vga_bb_draw_rect_outline(w->x-3, w->y-3, w->w+6, w->h+6, 0xFFFBBF24);
+        }
     } else {
         vga_bb_draw_rect_outline(w->x, w->y, w->w, w->h, B_BORDER);
+        if (high_contrast_mode) {
+            vga_bb_draw_rect_outline(w->x-1, w->y-1, w->w+2, w->h+2, 0xFFA0A0A0);
+        }
     }
     /* Inner top highlight for depth */
     vga_bb_draw_hline(w->x+10, w->y+1, w->w-20, S_GLASS_BORDER);
@@ -1225,6 +1278,18 @@ static void draw_window(int wi) {
         if (cur_x < cx+cw-4) {
             uint32_t cc = (timer_get_ticks()/30)%2 ? pc : B_BG_ALT;
             vga_bb_fill_rect(cur_x, iy, 2, CH, cc);
+        }
+        /* ── AI Ghost Text Suggestion ── */
+        if (suggestion_active && suggestion_text[0] && wi == win_focus) {
+            int ghost_x = cur_x + 6;
+            for (int gi = 0; suggestion_text[gi] && ghost_x + CW < cx + cw - 4; gi++) {
+                vga_bb_draw_char_2x(ghost_x, iy, suggestion_text[gi], 0xFF2A3A4A, 0x00000000);
+                ghost_x += CW;
+            }
+            /* Tab hint */
+            if (ghost_x + 5*CW < cx + cw - 4) {
+                vga_bb_draw_string(ghost_x + 8, iy + 4, "[Tab]", 0xFF2A3848, 0x00000000);
+            }
         }
     }
     else if (w->type == WIN_FILES) {
@@ -2360,6 +2425,215 @@ static void draw_toasts(void) {
     }
 }
 
+/* ── Narrator Bar (F1 Accessibility) ──────────────────── */
+static void draw_narrator_bar(void) {
+    if (!narrator_active) return;
+
+    int bar_h = 32;
+    int bar_y = 0;
+    uint32_t now = timer_get_ticks();
+    uint32_t elapsed = now - narrator_fade_tick;
+
+    /* Fade alpha: full opacity for 3s, then fade out */
+    int alpha = 0xD0;
+    if (narrator_text[0] == '\0') alpha = 0x60;
+    else if (elapsed > 300 && elapsed < 360) {
+        alpha = (int)((360 - elapsed) * 0xD0) / 60;
+        if (alpha < 0x20) alpha = 0x20;
+    } else if (elapsed >= 360) {
+        alpha = 0x20;
+    }
+
+    uint32_t bg = ((uint32_t)alpha << 24) | (S_BG_DARK & 0x00FFFFFF);
+
+    /* Bar background — full width frosted strip */
+    vga_bb_fill_rect(0, bar_y, SCRW, bar_h, bg);
+    /* Neon accent line at bottom */
+    uint32_t accent_a = ((uint32_t)(alpha/2) << 24) | (S_NEON_CYAN & 0x00FFFFFF);
+    vga_bb_draw_hline(0, bar_y + bar_h - 1, SCRW, accent_a);
+
+    /* AI icon */
+    uint32_t icon_a = ((uint32_t)alpha << 24) | (S_NEON_PURPLE & 0x00FFFFFF);
+    vga_bb_fill_circle(20, bar_y + bar_h/2, 8, icon_a);
+    vga_bb_fill_circle(20, bar_y + bar_h/2, 5, bg);
+    uint32_t text_a = ((uint32_t)alpha << 24) | 0x00E8ECF4;
+    vga_bb_draw_string_2x(14, bar_y + 8, "N", icon_a, 0x00000000);
+
+    /* Narrator label */
+    uint32_t label_a = ((uint32_t)(alpha*2/3) << 24) | (S_NEON_CYAN & 0x00FFFFFF);
+    vga_bb_draw_string_2x(36, bar_y + 8, "Narrator:", label_a, 0x00000000);
+
+    /* Description text */
+    if (narrator_text[0]) {
+        vga_bb_draw_string_2x(36 + 10*CW, bar_y + 8, narrator_text, text_a, 0x00000000);
+    } else {
+        uint32_t dim_a = ((uint32_t)(alpha/2) << 24) | 0x005A6A80;
+        vga_bb_draw_string_2x(36 + 10*CW, bar_y + 8, "Hover over items for descriptions", dim_a, 0x00000000);
+    }
+
+    /* F1 toggle hint (right side) */
+    uint32_t hint_a = ((uint32_t)(alpha/3) << 24) | 0x005A6A80;
+    vga_bb_draw_string(SCRW - 60, bar_y + 12, "[F1]", hint_a, 0x00000000);
+}
+
+/* ── AI Command Palette (Ctrl+Space) ─────────────────── */
+static void draw_command_palette(void) {
+    if (!cmdpal_open) return;
+
+    uint32_t anim_t = timer_get_ticks();
+
+    /* Dim overlay behind palette */
+    vga_bb_fill_rect(0, 0, SCRW, SCRH, 0x60000000);
+
+    /* Centered palette panel */
+    int pw = 700, ph = 220;
+    int px = (SCRW - pw) / 2;
+    int py = SCRH / 3 - ph / 2;
+
+    /* Multi-layer shadow */
+    ui_soft_shadow(px, py, pw, ph, 20, 6);
+
+    /* Frosted glass panel */
+    ui_frosted_panel(px, py, pw, ph, 16, S_BG, S_GLASS_BORDER);
+
+    /* Animated neon border — breathing purple glow */
+    int breath = sine_approx((anim_t * 5) % 360);
+    int glow_a = 0x40 + (breath * 0x30) / 100;
+    if (glow_a < 0x20) glow_a = 0x20;
+    uint32_t glow_c = ((uint32_t)glow_a << 24) | (S_NEON_PURPLE & 0x00FFFFFF);
+    vga_bb_draw_rect_outline(px-1, py-1, pw+2, ph+2, glow_c);
+    ui_neon_border(px, py, pw, ph, 16, S_NEON_PURPLE);
+
+    /* Header */
+    vga_bb_fill_circle(px + 28, py + 28, 10, S_NEON_PURPLE);
+    vga_bb_fill_circle(px + 28, py + 28, 7, S_BG_DEEP);
+    vga_bb_draw_string_2x(px + 22, py + 21, "A", S_NEON_PURPLE, 0x00000000);
+    vga_bb_draw_string_2x(px + 46, py + 18, "AI Command Palette", S_TEXT, 0x00000000);
+    vga_bb_draw_string(px + 46, py + 38, "Type a command in natural language", S_TEXT_DIM, 0x00000000);
+
+    vga_bb_draw_hline(px + 16, py + 54, pw - 32, S_SEPARATOR);
+
+    /* Input field */
+    int ix = px + 20, iy = py + 64, iw = pw - 40, ih = 36;
+    vga_bb_fill_rounded_rect(ix, iy, iw, ih, 8, S_BG_DARK);
+    vga_bb_draw_rect_outline(ix, iy, iw, ih, S_NEON_PURPLE);
+
+    /* Prompt symbol */
+    vga_bb_fill_circle(ix + 18, iy + ih/2, 8, S_NEON_PURPLE);
+    vga_bb_fill_circle(ix + 18, iy + ih/2, 5, S_BG_DARK);
+    vga_bb_draw_string_2x(ix + 32, iy + 10, cmdpal_input, S_TEXT, 0x00000000);
+
+    /* Blinking cursor */
+    int cpos = ix + 32 + cmdpal_input_pos * CW;
+    if (cpos < ix + iw - 8) {
+        uint32_t cc = (anim_t/30)%2 ? S_NEON_PURPLE : S_BG_DARK;
+        vga_bb_fill_rect(cpos, iy + 8, 2, CH, cc);
+    }
+
+    /* Results area */
+    int ry = iy + ih + 12;
+    if (cmdpal_thinking) {
+        /* Animated thinking dots */
+        int dots = 1 + (anim_t / 30) % 3;
+        char dbuf[8] = "...";
+        dbuf[dots] = '\0';
+        vga_bb_fill_circle(px + 30, ry + 10, 6, S_NEON_PURPLE);
+        /* Spinning ring */
+        int sdeg = (anim_t * 10) % 360;
+        int sdx = (sine_approx((sdeg+90)%360) * 6) / 100;
+        int sdy = -(sine_approx(sdeg%360) * 6) / 100;
+        vga_bb_fill_circle(px + 30 + sdx, ry + 10 + sdy, 2, S_NEON_CYAN);
+        vga_bb_draw_string_2x(px + 46, ry + 2, "Thinking", S_NEON_PURPLE, 0x00000000);
+        vga_bb_draw_string_2x(px + 46 + 8*CW, ry + 2, dbuf, S_NEON_PURPLE, 0x00000000);
+    } else if (cmdpal_has_result) {
+        /* Show result with accent */
+        vga_bb_fill_rounded_rect(px + 16, ry - 4, pw - 32, 70, 8, 0x15FFFFFF);
+        vga_bb_fill_rounded_rect(px + 16, ry - 4, 4, 70, 2, S_NEON_CYAN);
+
+        /* Action badge */
+        if (cmdpal_action == AI_ACTION_OPEN) {
+            vga_bb_fill_rounded_rect(px + 28, ry, 50, 18, 6, S_GREEN);
+            vga_bb_draw_string(px + 32, ry + 4, "OPEN", S_BG_DEEP, 0x00000000);
+        } else if (cmdpal_action == AI_ACTION_TIME) {
+            vga_bb_fill_rounded_rect(px + 28, ry, 50, 18, 6, S_YELLOW);
+            vga_bb_draw_string(px + 32, ry + 4, "TIME", S_BG_DEEP, 0x00000000);
+        } else if (cmdpal_action == AI_ACTION_MEM) {
+            vga_bb_fill_rounded_rect(px + 28, ry, 50, 18, 6, S_NEON_CYAN);
+            vga_bb_draw_string(px + 35, ry + 4, "MEM", S_BG_DEEP, 0x00000000);
+        } else {
+            vga_bb_fill_rounded_rect(px + 28, ry, 64, 18, 6, S_NEON_PURPLE);
+            vga_bb_draw_string(px + 32, ry + 4, "ANSWER", S_BG_DEEP, 0x00000000);
+        }
+
+        /* Response text — word-wrap at panel edge */
+        int rtx = px + 28;
+        int rty = ry + 24;
+        int max_c = (pw - 60) / CW;
+        for (int ci = 0; cmdpal_result[ci] && rty + CH < py + ph - 8; ci++) {
+            if (ci > 0 && ci % max_c == 0) { rty += CH + 2; rtx = px + 28; }
+            vga_bb_draw_char_2x(rtx, rty, cmdpal_result[ci], S_TEXT, 0x00000000);
+            rtx += CW;
+        }
+    } else {
+        /* Placeholder hints */
+        vga_bb_draw_string_2x(px + 28, ry + 2, "Try: \"open terminal\"", S_TEXT_DIM, 0x00000000);
+        vga_bb_draw_string_2x(px + 28, ry + 22, "     \"what time is it\"", S_TEXT_DIM, 0x00000000);
+        vga_bb_draw_string_2x(px + 28, ry + 42, "     \"show memory usage\"", S_TEXT_DIM, 0x00000000);
+    }
+
+    /* Esc hint */
+    vga_bb_draw_string(px + pw - 80, py + ph - 18, "[Esc] close", S_TEXT_DIM, 0x00000000);
+}
+
+/* ── AI Health Summary Widget ────────────────────────── */
+static void draw_health_widget(void) {
+    int hx = SCRW - 180, hy = 700;
+    /* Don't draw if too close to dock */
+    if (hy + 60 > dock_y - 20) return;
+
+    ui_card(hx, hy, 160, 56, 12, 0x30FFFFFF);
+
+    /* Pulsing health indicator dot */
+    uint32_t anim_t = timer_get_ticks();
+    int pulse = sine_approx((anim_t * 4) % 360);
+    int p_a = 0x60 + (pulse * 0x30) / 100;
+    uint32_t dot_c;
+    if (strstr(health_summary, "CRITICAL")) dot_c = S_RED;
+    else if (strstr(health_summary, "Warning")) dot_c = S_YELLOW;
+    else dot_c = S_GREEN;
+
+    uint32_t dot_glow = ((uint32_t)p_a << 24) | (dot_c & 0x00FFFFFF);
+    vga_bb_fill_circle(hx + 14, hy + 16, 6, dot_glow);
+    vga_bb_fill_circle(hx + 14, hy + 16, 4, dot_c);
+
+    vga_bb_draw_string(hx + 26, hy + 10, "HEALTH", S_TEXT_DIM, 0x00000000);
+
+    /* Typewriter-animated health text */
+    if (health_summary[0]) {
+        int show_len = health_typewriter_pos;
+        int full_len = (int)strlen(health_summary);
+        if (show_len > full_len) show_len = full_len;
+        /* Draw only show_len chars */
+        int tx = hx + 10;
+        for (int ci = 0; ci < show_len && tx + 9 < hx + 150; ci++) {
+            vga_bb_draw_char(tx, hy + 28, health_summary[ci], dot_c, 0x00000000);
+            tx += 9;
+        }
+        /* Blinking cursor at end of typewriter */
+        if (show_len < full_len && (anim_t/15)%2) {
+            vga_bb_fill_rect(tx, hy + 28, 6, 8, dot_c);
+        }
+        /* Second line if text wraps */
+        if (show_len > 16) {
+            tx = hx + 10;
+            for (int ci = 16; ci < show_len && tx + 9 < hx + 150; ci++) {
+                vga_bb_draw_char(tx, hy + 40, health_summary[ci], S_TEXT_DIM, 0x00000000);
+                tx += 9;
+            }
+        }
+    }
+}
+
 /* ── Widgets ──────────────────────────────────────────── */
 static void draw_widgets(void) {
     rtc_time_t t; rtc_read(&t);
@@ -2528,6 +2802,9 @@ static void draw_desktop(void) {
     draw_kickoff();
     draw_context_menu();
     draw_toasts();
+    draw_narrator_bar();
+    draw_health_widget();
+    draw_command_palette();
     mouse_state_t ms; mouse_get_state(&ms);
     draw_cursor(ms.x, ms.y);
     vga_flip();
@@ -2599,12 +2876,106 @@ void desktop_run(void) {
         if (ms.moved) needs_redraw = 1;
         if (keyboard_has_key()) {
             char c=keyboard_getchar(); needs_redraw=1;
-            if (win_focus>=0 && windows[win_focus].active) {
+            /* ── System-wide hotkeys (before window dispatch) ── */
+            if ((uint8_t)c == KEY_F1) {
+                narrator_active = !narrator_active;
+                if (narrator_active) {
+                    strcpy(narrator_text, "Narrator enabled - hover items for descriptions");
+                    narrator_fade_tick = timer_get_ticks();
+                    toast_show("Narrator ON", S_NEON_CYAN);
+                } else {
+                    toast_show("Narrator OFF", S_TEXT_DIM);
+                }
+            } else if ((uint8_t)c == KEY_F2) {
+                high_contrast_mode = !high_contrast_mode;
+                if (high_contrast_mode) {
+                    toast_show("High Contrast ON", S_YELLOW);
+                } else {
+                    toast_show("High Contrast OFF", S_TEXT_DIM);
+                }
+            } else if ((uint8_t)c == KEY_CTRL_SPACE) {
+                cmdpal_open = !cmdpal_open;
+                if (cmdpal_open) {
+                    cmdpal_input[0] = '\0'; cmdpal_input_pos = 0;
+                    cmdpal_result[0] = '\0'; cmdpal_has_result = 0;
+                    cmdpal_thinking = 0; cmdpal_action = 0;
+                }
+            } else if (cmdpal_open) {
+                /* ── Command Palette keyboard handling ── */
+                if (c == 27) { /* Escape */
+                    cmdpal_open = 0;
+                } else if (c == '\n' && cmdpal_input_pos > 0 && !cmdpal_thinking) {
+                    /* Submit query to LLM */
+                    cmdpal_thinking = 1;
+                    cmdpal_has_result = 0;
+                    /* Build intent-aware system prompt */
+                    char sys_prompt[256];
+                    strcpy(sys_prompt, "You are SwanOS AI. Parse user intent. "
+                        "If they want to open an app, respond with [OPEN:appname]. "
+                        "Apps: terminal,files,notes,about,ai,calc,sysmon,browser,network,audit,draw,clock. "
+                        "If they ask the time, respond [TIME]. "
+                        "If they ask about memory, respond [MEM]. "
+                        "Otherwise give a brief answer under 30 words.");
+                    llm_set_system_prompt(sys_prompt);
+                    char rsp[512];
+                    llm_query(cmdpal_input, rsp, sizeof(rsp));
+                    llm_set_system_prompt("You are SwanOS AI, an intelligent assistant. Keep answers concise.");
+                    /* Parse intent */
+                    ai_intent_t intent = kernel_ai_parse_intent(rsp);
+                    cmdpal_action = intent.action;
+                    cmdpal_action_app = intent.app_id;
+                    strncpy(cmdpal_result, intent.answer, 127);
+                    cmdpal_result[127] = '\0';
+                    cmdpal_has_result = 1;
+                    cmdpal_thinking = 0;
+                    /* Auto-execute actions */
+                    if (intent.action == AI_ACTION_OPEN && intent.app_id >= 0) {
+                        open_window(intent.app_id);
+                        /* Build nice result message */
+                        strcpy(cmdpal_result, "Opened ");
+                        strcat(cmdpal_result, kernel_ai_get_app_description(intent.app_id));
+                    } else if (intent.action == AI_ACTION_TIME) {
+                        rtc_time_t rtc; rtc_read(&rtc);
+                        char tb[32]; char tn[6];
+                        strcpy(tb, "");
+                        itoa(rtc.hour, tn, 10); strcat(tb, tn); strcat(tb, ":");
+                        if (rtc.minute < 10) strcat(tb, "0");
+                        itoa(rtc.minute, tn, 10); strcat(tb, tn);
+                        strcpy(cmdpal_result, "Current time: ");
+                        strcat(cmdpal_result, tb);
+                    } else if (intent.action == AI_ACTION_MEM) {
+                        char mb2[64]; char mn[12];
+                        strcpy(mb2, "Memory: ");
+                        itoa(mem_used()/1024, mn, 10); strcat(mb2, mn); strcat(mb2, "K / ");
+                        itoa(mem_total()/1024, mn, 10); strcat(mb2, mn); strcat(mb2, "K used");
+                        strcpy(cmdpal_result, mb2);
+                    }
+                } else if (c == '\b') {
+                    if (cmdpal_input_pos > 0) {
+                        cmdpal_input_pos--;
+                        cmdpal_input[cmdpal_input_pos] = '\0';
+                    }
+                } else if (c >= ' ' && cmdpal_input_pos < 78) {
+                    cmdpal_input[cmdpal_input_pos++] = c;
+                    cmdpal_input[cmdpal_input_pos] = '\0';
+                }
+            } else if (c == '\t' && suggestion_active && suggestion_text[0] &&
+                       win_focus >= 0 && windows[win_focus].active &&
+                       (windows[win_focus].type == WIN_TERM || windows[win_focus].type == WIN_AI)) {
+                /* Tab: accept ghost text suggestion */
+                window_t *fw = &windows[win_focus];
+                for (int si = 0; suggestion_text[si] && fw->input_pos < 78; si++) {
+                    fw->input[fw->input_pos++] = suggestion_text[si];
+                }
+                fw->input[fw->input_pos] = '\0';
+                suggestion_active = 0;
+                suggestion_text[0] = '\0';
+            } else if (win_focus>=0 && windows[win_focus].active) {
                 window_t *fw=&windows[win_focus];
                 if (fw->type==WIN_TERM) {
-                    if(c=='\n') term_process_cmd(fw);
-                    else if(c=='\b'){if(fw->input_pos>0){fw->input_pos--;fw->input[fw->input_pos]='\0';}}
-                    else if(c>=' '&&fw->input_pos<78){fw->input[fw->input_pos++]=c;fw->input[fw->input_pos]='\0';}
+                    if(c=='\n') { term_process_cmd(fw); suggestion_active=0; suggestion_text[0]='\0'; }
+                    else if(c=='\b'){if(fw->input_pos>0){fw->input_pos--;fw->input[fw->input_pos]='\0';} suggestion_active=0;}
+                    else if(c>=' '&&fw->input_pos<78){fw->input[fw->input_pos++]=c;fw->input[fw->input_pos]='\0'; suggestion_tick=timer_get_ticks(); suggestion_active=0;}
                 } else if (fw->type==WIN_NOTES) {
                     if(c==19) fs_write(fw->note_file,fw->note_text);
                     else if(c=='\b'){if(fw->note_len>0){fw->note_len--;fw->note_text[fw->note_len]='\0';}}
@@ -2618,9 +2989,9 @@ void desktop_run(void) {
                         char echo[44];strcpy(echo,"> ");strcat(echo,fw->input);term_add_line(fw,echo);term_add_line(fw,"[AI] ...");
                         char rsp[512];llm_query(fw->input,rsp,sizeof(rsp));if(fw->line_count>0)fw->line_count--;
                         char *rp=rsp;while(*rp){char ln[40];int li=0;while(*rp&&*rp!='\n'&&li<38)ln[li++]=*rp++;ln[li]='\0';if(li>0)term_add_line(fw,ln);if(*rp=='\n')rp++;}
-                        fw->input_pos=0;fw->input[0]='\0';}}
-                    else if(c=='\b'){if(fw->input_pos>0){fw->input_pos--;fw->input[fw->input_pos]='\0';}}
-                    else if(c>=' '&&fw->input_pos<78){fw->input[fw->input_pos++]=c;fw->input[fw->input_pos]='\0';}
+                        fw->input_pos=0;fw->input[0]='\0'; suggestion_active=0; suggestion_text[0]='\0';}}
+                    else if(c=='\b'){if(fw->input_pos>0){fw->input_pos--;fw->input[fw->input_pos]='\0';} suggestion_active=0;}
+                    else if(c>=' '&&fw->input_pos<78){fw->input[fw->input_pos++]=c;fw->input[fw->input_pos]='\0'; suggestion_tick=timer_get_ticks(); suggestion_active=0;}
                 }
             }
         }
@@ -2687,6 +3058,49 @@ void desktop_run(void) {
                     needs_redraw = 1;
                 }
             }
+
+            /* ── AI Health Summary Update (every ~30s = 3000 ticks) ── */
+            if (ticks - health_tick > 3000) {
+                kernel_ai_get_health_summary(health_summary, sizeof(health_summary));
+                health_typewriter_pos = 0;
+                health_tick = ticks;
+                needs_redraw = 1;
+            }
+            /* Typewriter animation for health text (advance 1 char per tick) */
+            if (health_summary[0] && health_typewriter_pos < (int)strlen(health_summary)) {
+                health_typewriter_pos++;
+                needs_redraw = 1;
+            }
+
+            /* ── AI Smart Suggestion (after 1.5s idle in terminal) ── */
+            if (suggestion_tick > 0 && !suggestion_active &&
+                ticks - suggestion_tick > 150 &&
+                win_focus >= 0 && windows[win_focus].active &&
+                (windows[win_focus].type == WIN_TERM || windows[win_focus].type == WIN_AI) &&
+                windows[win_focus].input_pos > 0) {
+                /* Generate a simple local suggestion based on input prefix */
+                window_t *sw = &windows[win_focus];
+                suggestion_text[0] = '\0';
+                /* Match common commands for quick local suggestions */
+                if (strncmp(sw->input, "he", 2) == 0) strcpy(suggestion_text, "lp");
+                else if (strncmp(sw->input, "cl", 2) == 0) strcpy(suggestion_text, "ear");
+                else if (strncmp(sw->input, "ls", 2) == 0) strcpy(suggestion_text, "");
+                else if (strncmp(sw->input, "as", 2) == 0) strcpy(suggestion_text, "k ");
+                else if (strncmp(sw->input, "se", 2) == 0) strcpy(suggestion_text, "tkey ");
+                else if (strncmp(sw->input, "ca", 2) == 0) strcpy(suggestion_text, "t readme.txt");
+                else if (strncmp(sw->input, "mk", 2) == 0) strcpy(suggestion_text, "dir ");
+                else if (strncmp(sw->input, "to", 2) == 0) strcpy(suggestion_text, "uch ");
+                else if (strncmp(sw->input, "up", 2) == 0) strcpy(suggestion_text, "time");
+                else if (strncmp(sw->input, "pr", 2) == 0) strcpy(suggestion_text, "ocs");
+                else if (strncmp(sw->input, "ne", 2) == 0) strcpy(suggestion_text, "tinfo");
+                else if (strncmp(sw->input, "au", 2) == 0) strcpy(suggestion_text, "dit");
+                else if (strncmp(sw->input, "ec", 2) == 0) strcpy(suggestion_text, "ho ");
+                else if (strncmp(sw->input, "gu", 2) == 0) strcpy(suggestion_text, "i");
+                else if (strncmp(sw->input, "wr", 2) == 0) strcpy(suggestion_text, "ite ");
+                else if (strncmp(sw->input, "lo", 2) == 0) strcpy(suggestion_text, "gout");
+                if (suggestion_text[0]) suggestion_active = 1;
+                suggestion_tick = 0;
+            }
         }
 
         /* Cursor blink — only trigger redraw if a text-input window is focused */
@@ -2698,6 +3112,8 @@ void desktop_run(void) {
                 if (ft == WIN_TERM || ft == WIN_AI || ft == WIN_NOTES)
                     needs_redraw = 1;
             }
+            /* Command palette cursor blink + thinking animation */
+            if (cmdpal_open) needs_redraw = 1;
         }
 
         /* Clock update — check every second instead of every tick */

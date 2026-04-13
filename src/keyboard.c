@@ -17,6 +17,7 @@ static volatile char kb_buffer[KB_BUFFER_SIZE];
 static volatile int  kb_head = 0;
 static volatile int  kb_tail = 0;
 static int shift_pressed = 0;
+static int ctrl_pressed = 0;
 
 /* US keyboard scancode → ASCII (lowercase) */
 static const char scancode_to_ascii[128] = {
@@ -52,6 +53,10 @@ static void keyboard_callback(registers_t *regs) {
     if (scancode == 0x2A || scancode == 0x36) { shift_pressed = 1; return; }
     if (scancode == 0xAA || scancode == 0xB6) { shift_pressed = 0; return; }
 
+    /* Track ctrl key */
+    if (scancode == 0x1D) { ctrl_pressed = 1; return; }
+    if (scancode == 0x9D) { ctrl_pressed = 0; return; }
+
     /* Ignore key releases (bit 7 set) */
     if (scancode & 0x80) return;
 
@@ -60,6 +65,14 @@ static void keyboard_callback(registers_t *regs) {
     if (scancode == 0x50) { kb_push((char)0x81); return; } /* Down  */
     if (scancode == 0x4B) { kb_push((char)0x82); return; } /* Left  */
     if (scancode == 0x4D) { kb_push((char)0x83); return; } /* Right */
+
+    /* Function keys → special codes */
+    if (scancode == 0x3B) { kb_push((char)KEY_F1); return; } /* F1 */
+    if (scancode == 0x3C) { kb_push((char)KEY_F2); return; } /* F2 */
+    if (scancode == 0x3D) { kb_push((char)KEY_F3); return; } /* F3 */
+
+    /* Ctrl+Space combo */
+    if (ctrl_pressed && scancode == 0x39) { kb_push((char)KEY_CTRL_SPACE); return; }
 
     char c;
     if (scancode < 128) {

@@ -95,6 +95,14 @@ void llm_send_key(void) {
     serial_write_char('\x04');
 }
 
+void llm_set_system_prompt(const char *prompt) {
+    serial_write_char('\x01');
+    serial_write_char('S');
+    const char *p = prompt;
+    while (*p) serial_write_char(*p++);
+    serial_write_char('\x04');
+}
+
 /* ── Synchronous Query (blocking) ─────────────────────────── */
 int llm_query(const char *question, char *response, int max_len) {
     if (!llm_ready()) {

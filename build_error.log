@@ -1,19 +1,26 @@
-src/desktop.c: In function ‘desktop_run’:
-src/desktop.c:2036:17: warning: this ‘if’ clause does not guard... [-Wmisleading-indentation]
- 2036 |                 if(nx<0)nx=0; if(ny<0)ny=0;
+src/desktop.c: In function ‘handle_click’:
+src/desktop.c:2295:17: warning: this ‘if’ clause does not guard... [-Wmisleading-indentation]
+ 2295 |                 if (cell_w < 2) cell_w = 2; if (cell_h < 2) cell_h = 2;
       |                 ^~
-src/desktop.c:2036:31: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the ‘if’
- 2036 |                 if(nx<0)nx=0; if(ny<0)ny=0;
+src/desktop.c:2295:45: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the ‘if’
+ 2295 |                 if (cell_w < 2) cell_w = 2; if (cell_h < 2) cell_h = 2;
+      |                                             ^~
+src/desktop.c: In function ‘desktop_run’:
+src/desktop.c:2594:17: warning: this ‘if’ clause does not guard... [-Wmisleading-indentation]
+ 2594 |                 if(nx<0)nx=0; if(ny<0)ny=0;
+      |                 ^~
+src/desktop.c:2594:31: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the ‘if’
+ 2594 |                 if(nx<0)nx=0; if(ny<0)ny=0;
       |                               ^~
 src/desktop.c: At top level:
-src/desktop.c:378:12: warning: ‘tray_slot_order’ defined but not used [-Wunused-variable]
-  378 | static int tray_slot_order[5] = {0,1,2,3,4}; /* MEM, NET, VOL, BAT, BELL */
+src/desktop.c:417:12: warning: ‘tray_slot_order’ defined but not used [-Wunused-variable]
+  417 | static int tray_slot_order[5] = {0,1,2,3,4}; /* MEM, NET, VOL, BAT, BELL */
       |            ^~~~~~~~~~~~~~~
-src/desktop.c:377:12: warning: ‘tray_drag_slot’ defined but not used [-Wunused-variable]
-  377 | static int tray_drag_slot = -1;      /* which slot is being dragged */
+src/desktop.c:416:12: warning: ‘tray_drag_slot’ defined but not used [-Wunused-variable]
+  416 | static int tray_drag_slot = -1;      /* which slot is being dragged */
       |            ^~~~~~~~~~~~~~
-src/desktop.c:376:12: warning: ‘tray_drag_active’ defined but not used [-Wunused-variable]
-  376 | static int tray_drag_active = 0;     /* currently dragging a tray slot */
+src/desktop.c:415:12: warning: ‘tray_drag_active’ defined but not used [-Wunused-variable]
+  415 | static int tray_drag_active = 0;     /* currently dragging a tray slot */
       |            ^~~~~~~~~~~~~~~~
 src/fs.c: In function ‘fs_list’:
 src/fs.c:112:58: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
@@ -22,37 +29,41 @@ src/fs.c:112:58: warning: comparison of integer expressions of different signedn
 src/game.c:113:12: warning: ‘key_available’ defined but not used [-Wunused-function]
   113 | static int key_available(void) {
       |            ^~~~~~~~~~~~~
-src/kernel.c:242:13: warning: ‘draw_dot_spinner’ defined but not used [-Wunused-function]
-  242 | static void draw_dot_spinner(int cx, int cy, int r, int frame) {
+src/kernel.c:243:13: warning: ‘draw_dot_spinner’ defined but not used [-Wunused-function]
+  243 | static void draw_dot_spinner(int cx, int cy, int r, int frame) {
       |             ^~~~~~~~~~~~~~~~
-src/kernel.c:217:13: warning: ‘draw_glow_bar’ defined but not used [-Wunused-function]
-  217 | static void draw_glow_bar(int x, int y, int w, int h, int progress, int total) {
+src/kernel.c:218:13: warning: ‘draw_glow_bar’ defined but not used [-Wunused-function]
+  218 | static void draw_glow_bar(int x, int y, int w, int h, int progress, int total) {
       |             ^~~~~~~~~~~~~
-src/kernel.c:199:13: warning: ‘draw_glow_line’ defined but not used [-Wunused-function]
-  199 | static void draw_glow_line(int y, int x1, int x2, int center) {
+src/kernel.c:200:13: warning: ‘draw_glow_line’ defined but not used [-Wunused-function]
+  200 | static void draw_glow_line(int y, int x1, int x2, int center) {
       |             ^~~~~~~~~~~~~~
-src/kernel.c:174:13: warning: ‘draw_splash_bg’ defined but not used [-Wunused-function]
-  174 | static void draw_splash_bg(void) {
+src/kernel.c:175:13: warning: ‘draw_splash_bg’ defined but not used [-Wunused-function]
+  175 | static void draw_splash_bg(void) {
       |             ^~~~~~~~~~~~~~
-src/kernel.c:160:13: warning: ‘draw_pulse_rings’ defined but not used [-Wunused-function]
-  160 | static void draw_pulse_rings(int cx, int cy, int frame) {
+src/kernel.c:161:13: warning: ‘draw_pulse_rings’ defined but not used [-Wunused-function]
+  161 | static void draw_pulse_rings(int cx, int cy, int frame) {
       |             ^~~~~~~~~~~~~~~~
-src/kernel.c:96:13: warning: ‘draw_neural_net’ defined but not used [-Wunused-function]
-   96 | static void draw_neural_net(int cx, int cy, int frame) {
+src/kernel.c:97:13: warning: ‘draw_neural_net’ defined but not used [-Wunused-function]
+   97 | static void draw_neural_net(int cx, int cy, int frame) {
       |             ^~~~~~~~~~~~~~~
-src/kernel.c:76:13: warning: ‘draw_particles’ defined but not used [-Wunused-function]
-   76 | static void draw_particles(void) {
+src/kernel.c:77:13: warning: ‘draw_particles’ defined but not used [-Wunused-function]
+   77 | static void draw_particles(void) {
       |             ^~~~~~~~~~~~~~
-src/kernel.c:63:13: warning: ‘update_particles’ defined but not used [-Wunused-function]
-   63 | static void update_particles(void) {
+src/kernel.c:64:13: warning: ‘update_particles’ defined but not used [-Wunused-function]
+   64 | static void update_particles(void) {
       |             ^~~~~~~~~~~~~~~~
-src/kernel.c:52:13: warning: ‘spawn_particle’ defined but not used [-Wunused-function]
-   52 | static void spawn_particle(int cx, int cy) {
+src/kernel.c:53:13: warning: ‘spawn_particle’ defined but not used [-Wunused-function]
+   53 | static void spawn_particle(int cx, int cy) {
       |             ^~~~~~~~~~~~~~
 src/paging.c: In function ‘page_fault_handler’:
 src/paging.c:43:38: warning: unused parameter ‘regs’ [-Wunused-parameter]
    43 | void page_fault_handler(registers_t *regs) {
       |                         ~~~~~~~~~~~~~^~~~
+src/shell.c: In function ‘execute_command’:
+src/shell.c:1460:14: warning: variable ‘app_code’ set but not used [-Wunused-but-set-variable]
+ 1460 |         char app_code[] = {
+      |              ^~~~~~~~
 ld: warning: src/paging_asm.o: missing .note.GNU-stack section implies executable stack
 ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
 xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
@@ -60,14 +71,14 @@ xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
 Drive current: -outdev 'stdio:swanos.iso'
 Media current: stdio file, overwriteable
 Media status : is blank
-Media summary: 0 sessions, 0 data blocks, 0 data,  106g free
-Added to ISO image: directory '/'='/tmp/grub.zB8lcU'
+Media summary: 0 sessions, 0 data blocks, 0 data,  100g free
+Added to ISO image: directory '/'='/tmp/grub.VkResF'
 xorriso : UPDATE :     295 files added in 1 seconds
 Added to ISO image: directory '/'='/mnt/c/Users/VICTUS/Desktop/Swanos/iso'
 xorriso : UPDATE :     299 files added in 1 seconds
 xorriso : NOTE : Copying to System Area: 512 bytes from file '/usr/lib/grub/i386-pc/boot_hybrid.img'
-xorriso : UPDATE :  62.54% done
-ISO image produced: 2584 sectors
-Written to medium : 2584 sectors at LBA 0
+xorriso : UPDATE :  86.25% done
+ISO image produced: 2597 sectors
+Written to medium : 2597 sectors at LBA 0
 Writing to 'stdio:swanos.iso' completed successfully.
 

@@ -22,6 +22,9 @@ void llm_send_key(void);
 /* Send a query to the LLM via serial bridge and get the response */
 int llm_query(const char *question, char *response, int max_len);
 
+/* Set the system prompt used by the LLM bridge */
+void llm_set_system_prompt(const char *prompt);
+
 /* ── Asynchronous / Non-Blocking Query ────────────────────── */
 /* Send a query without blocking — returns immediately */
 void llm_query_async(const char *question);

@@ -203,3 +203,149 @@ const char *kernel_ai_get_advice(int index) {
     if (index >= ai_status.advice_count) return "";
     return ai_status.advice[slot];
 }
+
+/* ── Intent Parsing ───────────────────────────────────────── */
+/* Map app name strings to window IDs
+   These must match WIN_* defines in desktop.c:
+   WIN_TERM=0, WIN_FILES=1, WIN_NOTES=2, WIN_ABOUT=3, WIN_AI=4,
+   WIN_CALC=5, WIN_SYSMON=6, WIN_STORE=7, WIN_BROWSER=8,
+   WIN_NETWORK=9, WIN_AUDIT=10, WIN_DRAW=11, WIN_CLOCK=12 */
+
+static int match_app_name(const char *name) {
+    /* Case-insensitive prefix matching */
+    if (strstr(name, "term") || strstr(name, "shell") || strstr(name, "swan_shell") || strstr(name, "swanshell")) return 0;
+    if (strstr(name, "file") || strstr(name, "feather")) return 1;
+    if (strstr(name, "note") || strstr(name, "love") || strstr(name, "loveletter")) return 2;
+    if (strstr(name, "about") || strstr(name, "song") || strstr(name, "swansong")) return 3;
+    if (strstr(name, "ai") || strstr(name, "soul") || strstr(name, "chat") || strstr(name, "swansoul")) return 4;
+    if (strstr(name, "calc") || strstr(name, "count") || strstr(name, "swancount")) return 5;
+    if (strstr(name, "monitor") || strstr(name, "sysmon") || strstr(name, "heartbeat")) return 6;
+    if (strstr(name, "store") || strstr(name, "nest") || strstr(name, "swannest")) return 7;
+    if (strstr(name, "browser") || strstr(name, "lake") || strstr(name, "web") || strstr(name, "swanlake")) return 8;
+    if (strstr(name, "network") || strstr(name, "wing") || strstr(name, "winglink")) return 9;
+    if (strstr(name, "audit") || strstr(name, "watch") || strstr(name, "swanwatch")) return 10;
+    if (strstr(name, "draw") || strstr(name, "paint") || strstr(name, "swandraw")) return 11;
+    if (strstr(name, "clock") || strstr(name, "time") || strstr(name, "swanclock")) return 12;
+    return -1;
+}
+
+ai_intent_t kernel_ai_parse_intent(const char *response) {
+    ai_intent_t intent;
+    memset(&intent, 0, sizeof(intent));
+    intent.action = AI_ACTION_ANSWER;
+    intent.app_id = -1;
+    
+    /* Copy answer text */
+    strncpy(intent.answer, response, 127);
+    intent.answer[127] = '\0';
+    
+    /* Scan for action tags */
+    const char *p = response;
+    
+    /* [OPEN:appname] */
+    const char *open_tag = strstr(p, "[OPEN:");
+    if (open_tag) {
+        const char *start = open_tag + 6;
+        const char *end = strchr(start, ']');
+        if (end && (end - start) < 32) {
+            char app_name[32];
+            int len = (int)(end - start);
+            strncpy(app_name, start, len);
+            app_name[len] = '\0';
+            int aid = match_app_name(app_name);
+            if (aid >= 0) {
+                intent.action = AI_ACTION_OPEN;
+                intent.app_id = aid;
+                /* Extract text after the tag as the answer */
+                const char *after = end + 1;
+                while (*after == ' ') after++;
+                if (*after) strncpy(intent.answer, after, 127);
+                return intent;
+            }
+        }
+    }
+    
+    /* [TIME] */
+    if (strstr(p, "[TIME]")) {
+        intent.action = AI_ACTION_TIME;
+        return intent;
+    }
+    
+    /* [MEM] */
+    if (strstr(p, "[MEM]")) {
+        intent.action = AI_ACTION_MEM;
+        return intent;
+    }
+    
+    /* [HELP] */
+    if (strstr(p, "[HELP]")) {
+        intent.action = AI_ACTION_HELP;
+        return intent;
+    }
+    
+    return intent;
+}
+
+/* ── Health Summary Generator ─────────────────────────────── */
+void kernel_ai_get_health_summary(char *buf, int len) {
+    uint32_t mt = mem_total();
+    uint32_t mu = mem_used();
+    uint32_t mem_pct = (mt > 0) ? (mu * 100) / mt : 0;
+    int nprocs = process_count_active();
+    uint32_t uptime = timer_get_seconds();
+    int ai_on = ai_status.connected;
+    
+    char tmp[12];
+    
+    if (mem_pct > 90) {
+        strcpy(buf, "CRITICAL: Memory at ");
+        itoa(mem_pct, tmp, 10); strcat(buf, tmp);
+        strcat(buf, "% - close apps now!");
+    } else if (mem_pct > 70) {
+        strcpy(buf, "Warning: Memory at ");
+        itoa(mem_pct, tmp, 10); strcat(buf, tmp);
+        strcat(buf, "%, ");
+        itoa(nprocs, tmp, 10); strcat(buf, tmp);
+        strcat(buf, " running");
+    } else if (nprocs > 8) {
+        strcpy(buf, "Busy: ");
+        itoa(nprocs, tmp, 10); strcat(buf, tmp);
+        strcat(buf, " procs, mem ");
+        itoa(mem_pct, tmp, 10); strcat(buf, tmp);
+        strcat(buf, "% - stable");
+    } else if (uptime < 30) {
+        strcpy(buf, "Just booted - all systems go");
+        if (ai_on) strcat(buf, ", AI online");
+    } else {
+        strcpy(buf, "Healthy: ");
+        itoa(mem_pct, tmp, 10); strcat(buf, tmp);
+        strcat(buf, "% mem, ");
+        itoa(nprocs, tmp, 10); strcat(buf, tmp);
+        strcat(buf, " procs");
+        if (ai_on) strcat(buf, ", AI on");
+    }
+    
+    /* Ensure null-termination */
+    buf[len - 1] = '\0';
+}
+
+/* ── App Descriptions for Narrator ────────────────────────── */
+const char *kernel_ai_get_app_description(int app_id) {
+    switch (app_id) {
+        case 0:  return "SwanShell - Terminal for commands and AI queries";
+        case 1:  return "Feather - File manager for browsing your files";
+        case 2:  return "LoveLetter - Text editor for notes and documents";
+        case 3:  return "SwanSong - About SwanOS, version and system info";
+        case 4:  return "SwanSoul - AI chat assistant, ask anything";
+        case 5:  return "SwanCount - Calculator for math operations";
+        case 6:  return "Heartbeat - System monitor with CPU and memory";
+        case 7:  return "SwanNest - App store for software downloads";
+        case 8:  return "SwanLake - Web browser with Firefox and Brave";
+        case 9:  return "WingLink - Network settings and connection status";
+        case 10: return "SwanWatch - Security audit log viewer";
+        case 11: return "SwanDraw - Pixel art drawing canvas";
+        case 12: return "SwanClock - Clock with analog display and stopwatch";
+        default: return "SwanOS application";
+    }
+}
+
